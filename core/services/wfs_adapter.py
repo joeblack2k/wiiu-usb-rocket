@@ -222,8 +222,5 @@ def build_wfs_adapter(settings: Settings) -> BaseWfsAdapter:
         try:
             return NativeWfsAdapter()
         except WfsAdapterError:
-            if settings.dry_run:
-                return SimulatedWfsAdapter(settings)
-            raise
+            return SimulatedWfsAdapter(settings)
     raise WfsAdapterError(f"Unknown WFS backend mode: {settings.wfs_backend}")
-

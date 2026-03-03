@@ -79,7 +79,15 @@ target_include_directories(${PROJECT_NAME}
 )
 
 find_package(Boost 1.64.0 REQUIRED)
-find_package(cryptopp REQUIRED)
+find_package(cryptopp QUIET)
+
+if(NOT cryptopp_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CRYPTOPP REQUIRED libcrypto++)
+    add_library(cryptopp::cryptopp INTERFACE IMPORTED)
+    target_include_directories(cryptopp::cryptopp INTERFACE ${CRYPTOPP_INCLUDE_DIRS})
+    target_link_libraries(cryptopp::cryptopp INTERFACE ${CRYPTOPP_LIBRARIES})
+endif()
 
 target_link_libraries(${PROJECT_NAME}
     PUBLIC

@@ -19,6 +19,8 @@ class CatalogService:
         self._lock = threading.Lock()
         self._items: list[CatalogItem] = []
         self._last_refresh: datetime | None = None
+        self._last_error: str | None = None
+        self._next_retry_at: datetime | None = None
         self._load_cache_from_disk()
 
     def _load_cache_from_disk(self) -> None:
@@ -57,12 +59,24 @@ class CatalogService:
 
     def refresh_if_needed(self) -> None:
         with self._lock:
+            now = utcnow()
+            if self._next_retry_at is not None and now < self._next_retry_at:
+                return
+
             if self._last_refresh is None:
-                self._refresh_locked()
+                self._try_refresh_locked(now)
                 return
             max_age = timedelta(minutes=self._settings.catalog_refresh_minutes)
-            if utcnow() - self._last_refresh > max_age:
-                self._refresh_locked()
+            if now - self._last_refresh > max_age:
+                self._try_refresh_locked(now)
+
+    def _try_refresh_locked(self, now: datetime) -> None:
+        try:
+            self._refresh_locked()
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            # avoid hammering an unstable upstream endpoint
+            self._next_retry_at = now + timedelta(minutes=5)
 
     def force_refresh(self) -> None:
         with self._lock:
@@ -75,6 +89,8 @@ class CatalogService:
         items = parse_catalog_feed(response.text)
         self._items = items
         self._last_refresh = utcnow()
+        self._last_error = None
+        self._next_retry_at = None
         self._save_cache_to_disk()
 
     def query(
@@ -106,9 +122,14 @@ class CatalogService:
             if self._last_refresh is not None:
                 source_age_sec = int((utcnow() - self._last_refresh).total_seconds())
 
+            source_status = "ok"
+            if self._last_error is not None:
+                source_status = "stale" if self._items else "degraded"
+
             return {
                 "items": [item.to_dict() for item in selected],
                 "total": total,
                 "source_age_sec": source_age_sec,
+                "source_status": source_status,
+                "last_error": self._last_error,
             }
-
