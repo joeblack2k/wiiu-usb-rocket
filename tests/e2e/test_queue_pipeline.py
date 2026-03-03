@@ -53,7 +53,7 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
     queue_service = QueueService()
     download_service = DownloadService(settings)
 
-    def fake_download(title_id: str, region: str) -> DownloadResult:
+    def fake_download(title_id: str, region: str, allow_fake_tickets: bool = True) -> DownloadResult:
         work_dir = settings.artifacts_dir / title_id
         work_dir.mkdir(parents=True, exist_ok=True)
         content = b"test-content"

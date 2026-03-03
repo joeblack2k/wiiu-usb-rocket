@@ -88,8 +88,11 @@ class QueueWorker:
             self._queue_service.update_job(job_id, phase="downloading", progress=0.1)
             self._queue_service.add_job_event(job_id, "phase", {"phase": "downloading"})
 
+            allow_fake_tickets = self._settings_service.get_bool("allow_fake_tickets", True)
             t_download_start = time.monotonic()
-            download_result = self._download_service.download_title(title_id=title_id, region=region)
+            download_result = self._download_service.download_title(
+                title_id=title_id, region=region, allow_fake_tickets=allow_fake_tickets
+            )
             elapsed_download = time.monotonic() - t_download_start
             total_dl_bytes = sum(a.size for a in download_result.artifacts)
             speed_bps = int(total_dl_bytes / elapsed_download) if elapsed_download > 0 else 0

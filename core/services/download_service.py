@@ -121,7 +121,7 @@ class DownloadService:
             )
         return artifacts
 
-    def download_title(self, title_id: str, region: str) -> DownloadResult:
+    def download_title(self, title_id: str, region: str, allow_fake_tickets: bool = True) -> DownloadResult:
         title_id = title_id.lower()
         work_dir = self._settings.artifacts_dir / title_id
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -175,7 +175,7 @@ class DownloadService:
                             sha256=self._hash_file(cetk_path),
                         )
                     )
-                elif self._settings.is_custom_mirror:
+                elif allow_fake_tickets:
                     try:
                         cetk_bytes = generate_fake_cetk(title_id)
                         cetk_path.write_bytes(cetk_bytes)

@@ -20,3 +20,7 @@ class FallbackSettingsRequest(BaseModel):
 class EnableDownloadsRequest(BaseModel):
     enable_downloads: bool
 
+
+class AllowFakeTicketsRequest(BaseModel):
+    allow_fake_tickets: bool
+

@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from apps.worker.runner import QueueWorker
 from core.config import get_settings
 from core.db import init_db, init_engine
-from core.schemas import DiskAttachRequest, EnableDownloadsRequest, FallbackSettingsRequest, QueueItemCreateRequest
+from core.schemas import AllowFakeTicketsRequest, DiskAttachRequest, EnableDownloadsRequest, FallbackSettingsRequest, QueueItemCreateRequest
 from core.services.catalog_service import CatalogService
 from core.services.disk_service import DiskService
 from core.services.download_service import DownloadService
@@ -242,6 +242,13 @@ def api_settings_downloads(request: Request, payload: EnableDownloadsRequest) ->
     return {"enable_downloads": value}
 
 
+@app.post("/api/settings/fake-tickets")
+def api_settings_fake_tickets(request: Request, payload: AllowFakeTicketsRequest) -> dict:
+    services = get_services(request)
+    value = services["settings_service"].set_bool("allow_fake_tickets", payload.allow_fake_tickets)
+    return {"allow_fake_tickets": value}
+
+
 @app.post("/settings/downloads")
 def ui_settings_downloads(
     request: Request,
@@ -252,6 +259,22 @@ def ui_settings_downloads(
 ) -> RedirectResponse:
     services = get_services(request)
     services["settings_service"].set_bool("enable_downloads", enable_downloads)
+    params = "&".join(
+        f"{k}={v}" for k, v in [("search", search), ("region", region), ("category", category)] if v
+    )
+    return RedirectResponse(url=f"/?{params}" if params else "/", status_code=303)
+
+
+@app.post("/settings/fake-tickets")
+def ui_settings_fake_tickets(
+    request: Request,
+    allow_fake_tickets: bool = Form(...),
+    search: str = Form(""),
+    region: str = Form(""),
+    category: str = Form(""),
+) -> RedirectResponse:
+    services = get_services(request)
+    services["settings_service"].set_bool("allow_fake_tickets", allow_fake_tickets)
     params = "&".join(
         f"{k}={v}" for k, v in [("search", search), ("region", region), ("category", category)] if v
     )

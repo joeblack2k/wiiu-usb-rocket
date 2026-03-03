@@ -40,6 +40,15 @@
       Downloads: {{ "YES" if settings.enable_downloads else "NO" }}
     </button>
   </form>
+  <form method="post" action="/settings/fake-tickets" style="margin:0;">
+    <input type="hidden" name="allow_fake_tickets" value="{{ 'false' if settings.allow_fake_tickets else 'true' }}" />
+    <input type="hidden" name="search" value="{{ search }}" />
+    <input type="hidden" name="region" value="{{ region }}" />
+    <input type="hidden" name="category" value="{{ category }}" />
+    <button type="submit" style="background:{{ '#16a34a' if settings.allow_fake_tickets else '#dc2626' }};color:#fff;border:none;padding:0.3rem 0.9rem;cursor:pointer;">
+      Fake Ticket: {{ "AAN" if settings.allow_fake_tickets else "UIT" }}
+    </button>
+  </form>
 </div>
 
 {% if settings.enable_downloads %}
