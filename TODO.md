@@ -3,7 +3,7 @@
 Dit document beschrijft:
 1. Wat al gebouwd is.
 2. Wat nog ontbreekt.
-3. Welke delen **bewust niet** in deze codebase staan.
+3. Welke concrete taken nog openstaan.
 4. Exacte stappen om veilig verder te bouwen.
 
 ## 1) Huidige status (al geïmplementeerd)
@@ -22,23 +22,14 @@ Dit document beschrijft:
   - grootste `json` payload wordt geparsed naar catalog-items
   - `GET /api/catalog` geeft `source` en `source_status` terug
 
-## 2) Bewust niet-geïmplementeerd (compliance-gevoelig)
+## 2) Scope van deze TODO
 
-Onderstaand deel is **niet** opgenomen in deze codebase:
+Dit document bevat alleen:
+- concrete engineering-taken voor deze codebase,
+- operationele verbeteringen,
+- test- en observability-werk.
 
-- DRM/circumvention-specifieke key-decrypt pipelines.
-- Het ophalen/decrypten van beschermde contentstromen waarvoor expliciete licentie/autorisatie nodig is.
-
-### Waarom dit relevant is voor overdracht
-
-Als een extern team dit ooit toevoegt, moet dat in een aparte module met:
-
-1. juridische review,
-2. duidelijke herkomst- en gebruiksrechten,
-3. gescheiden code ownership,
-4. auditable logging en security controls.
-
-## 3) Technische TODO’s die wél veilig zijn en direct kunnen
+## 3) Technische TODO’s die direct kunnen
 
 ### A. Vault UX afronden
 
