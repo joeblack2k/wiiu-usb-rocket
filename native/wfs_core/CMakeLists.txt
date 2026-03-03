@@ -19,10 +19,10 @@ pybind11_add_module(wfs_core_native
 target_include_directories(wfs_core_native
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${WFSLIB_DIR}/src
 )
 
 target_link_libraries(wfs_core_native
   PRIVATE
     wfslib
 )
-
