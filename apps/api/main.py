@@ -3,7 +3,7 @@ import math
 import os
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from apps.worker.runner import QueueWorker
@@ -13,6 +13,7 @@ from core.schemas import AllowFakeTicketsRequest, DiskAttachRequest, EnableDownl
 from core.services.catalog_service import CatalogService
 from core.services.disk_service import DiskService
 from core.services.download_service import DownloadService
+from core.services.health_service import ReadinessService
 from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
 from core.services.settings_service import SettingsService
@@ -133,6 +134,14 @@ def startup() -> None:
 
     wfs_adapter = build_wfs_adapter(settings)
     disk_service = DiskService(settings, wfs_adapter)
+    if settings.wiiu_disk:
+        try:
+            disk_service.attach_device(settings.wiiu_disk)
+            logger.info("startup: auto-attached WIIU_DISK=%s", settings.wiiu_disk)
+        except WfsAdapterError as exc:
+            logger.warning("startup: failed to auto-attach WIIU_DISK=%s: %s", settings.wiiu_disk, exc)
+
+    readiness_service = ReadinessService(settings, settings_service, disk_service)
     writer_engine = WriterEngine(wfs_adapter, queue_service, settings_service)
     worker = QueueWorker(queue_service, download_service, analyzer, writer_engine, settings_service)
 
@@ -141,6 +150,7 @@ def startup() -> None:
     app.state.queue_service = queue_service
     app.state.catalog_service = catalog_service
     app.state.disk_service = disk_service
+    app.state.readiness_service = readiness_service
     app.state.writer_engine = writer_engine
     app.state.worker = worker
 
@@ -158,9 +168,17 @@ def get_services(request: Request):
         "queue": request.app.state.queue_service,
         "catalog": request.app.state.catalog_service,
         "disk": request.app.state.disk_service,
+        "readiness": request.app.state.readiness_service,
         "worker": request.app.state.worker,
         "writer_engine": request.app.state.writer_engine,
     }
+
+
+def _readiness_block_response(services: dict) -> JSONResponse | None:
+    payload = services["readiness"].evaluate()
+    if payload.get("ready"):
+        return None
+    return JSONResponse(status_code=503, content=payload)
 
 
 @app.get("/healthz")
@@ -172,6 +190,15 @@ def healthz(request: Request) -> dict:
         "worker_running": services["worker"].is_running(),
         "disk_attached": bool(disk),
     }
+
+
+@app.get("/readyz")
+def readyz(request: Request) -> dict:
+    services = get_services(request)
+    payload = services["readiness"].evaluate()
+    if payload.get("ready"):
+        return payload
+    return JSONResponse(status_code=503, content=payload)
 
 
 @app.get("/healthz/details")
@@ -254,6 +281,9 @@ def api_queue_list(request: Request) -> dict:
 @app.post("/api/queue/start")
 def api_queue_start(request: Request) -> dict:
     services = get_services(request)
+    readiness_block = _readiness_block_response(services)
+    if readiness_block is not None:
+        return readiness_block
     services["worker"].start()
     return {"running": True}
 
@@ -295,6 +325,9 @@ def api_disks_attach(request: Request, payload: DiskAttachRequest) -> dict:
 @app.post("/api/install/{queue_item_id}/execute")
 def api_install_execute(request: Request, queue_item_id: str) -> dict:
     services = get_services(request)
+    readiness_block = _readiness_block_response(services)
+    if readiness_block is not None:
+        return readiness_block
     result = services["worker"].execute_queue_item(queue_item_id)
     return {
         "job_id": result.get("job_id"),
@@ -526,6 +559,7 @@ def ui_status(request: Request) -> HTMLResponse:
         "status.html",
         {
             "disk_scan": disk_scan,
+            "readiness": services["readiness"].evaluate(),
             "active_disk": services["disk"].get_active_attachment(),
             "settings": services["settings_service"].get_runtime_settings(),
             "worker_running": services["worker"].is_running(),

@@ -60,11 +60,12 @@ std::vector<std::byte> make_entry_metadata(std::string_view name,
                                            uint32_t group,
                                            uint32_t mode,
                                            uint8_t size_category,
-                                           uint8_t metadata_log2_size) {
+                                           uint8_t metadata_log2_size,
+                                           size_t metadata_payload_size) {
   auto lowercase_name = normalize_key(name);
   size_t bitmap_size = div_ceil(lowercase_name.size(), size_t{8});
   size_t total_size = std::max(size_t{1} << metadata_log2_size,
-                               offsetof(EntryMetadata, case_bitmap) + bitmap_size + size_on_disk);
+                               offsetof(EntryMetadata, case_bitmap) + bitmap_size + metadata_payload_size);
   auto final_log2 = metadata_log2_from_total_size(total_size);
   total_size = size_t{1} << final_log2;
 
@@ -175,7 +176,8 @@ std::expected<std::shared_ptr<Directory>, WfsError> Directory::CreateDirectory(s
                                       group,
                                       mode,
                                       /*size_category=*/0,
-                                      /*metadata_log2_size=*/6);
+                                      /*metadata_log2_size=*/6,
+                                      /*metadata_payload_size=*/0);
 
   if (!map_.insert(key, reinterpret_cast<const EntryMetadata*>(metadata.data()))) {
     return std::unexpected(kNoSpace);
@@ -200,6 +202,23 @@ std::expected<std::shared_ptr<File>, WfsError> Directory::CreateFile(std::string
 
   uint32_t file_flags = encrypted ? 0u : static_cast<uint32_t>(EntryMetadata::Flags::UNENCRYPTED_FILE);
 
+  size_t metadata_payload_size = 0;
+  uint8_t size_category = 0;
+
+  if (size_on_disk > 0) {
+    const size_t cluster_log2 = quota_->block_size_log2() + log2_size(BlockType::Cluster);
+    size_t clusters_in_block = (quota_->block_size() - sizeof(MetadataBlockHeader)) / sizeof(DataBlocksClusterMetadata);
+    clusters_in_block = std::min(clusters_in_block, size_t{48});
+    if (clusters_in_block == 0) {
+      return std::unexpected(kOperationNotSupported);
+    }
+
+    const size_t data_clusters_count = div_ceil_pow2(size_on_disk, cluster_log2);
+    const size_t metadata_items_count = div_ceil(data_clusters_count, clusters_in_block);
+    metadata_payload_size = metadata_items_count * sizeof(uint32_be_t);
+    size_category = 4;
+  }
+
   auto metadata = make_entry_metadata(name,
                                       file_flags,
                                       size_on_disk,
@@ -208,8 +227,9 @@ std::expected<std::shared_ptr<File>, WfsError> Directory::CreateFile(std::string
                                       owner,
                                       group,
                                       mode,
-                                      /*size_category=*/0,
-                                      /*metadata_log2_size=*/9);
+                                      size_category,
+                                      /*metadata_log2_size=*/9,
+                                      metadata_payload_size);
   if (metadata.size() > (size_t{1} << 10)) {
     return std::unexpected(kOperationNotSupported);
   }

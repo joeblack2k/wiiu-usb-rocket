@@ -33,6 +33,8 @@ PYBIND11_MODULE(wfs_core_native, m) {
         return self.write_stream(path, payload, offset);
       })
       .def("delete", &WfsCoreEngine::remove)
+      .def("list_titles", &WfsCoreEngine::list_titles)
+      .def("remove_title", &WfsCoreEngine::remove_title, py::arg("title_id"))
       .def("flush", &WfsCoreEngine::flush)
       .def("integrity_check", [](WfsCoreEngine& self, const std::string& scope) {
         auto report = self.integrity_check(scope);

@@ -3,11 +3,44 @@
 <h2>Status</h2>
 <p>Worker running: <strong>{{ worker_running }}</strong></p>
 <p>Fallback enabled: <strong>{{ settings.allow_fallback }}</strong> | Dry-run: <strong>{{ settings.dry_run }}</strong></p>
+<p>Readiness: <strong>{{ readiness.ready }}</strong></p>
+{% if readiness.ready %}
+  <div class="ok">Ready for queue start and install execution.</div>
+{% else %}
+  <div class="warn">Not ready for queue start and install execution.</div>
+  <ul>
+    {% for check in readiness.blocking_failures %}
+      <li><code>{{ check.name }}</code>: {{ check.message }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
 {% if active_disk %}
   <div class="ok">Attached disk: <code>{{ active_disk.device_path }}</code></div>
 {% else %}
   <div class="warn">No active attached disk.</div>
 {% endif %}
+
+<h3>Readiness checks</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Check</th>
+      <th>OK</th>
+      <th>Blocking</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for check in readiness.checks %}
+      <tr>
+        <td><code>{{ check.name }}</code></td>
+        <td>{{ check.ok }}</td>
+        <td>{{ check.blocking }}</td>
+        <td>{{ check.message }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
 
 <h3>Catalog / Vault</h3>
 {% if catalog_source %}
@@ -55,4 +88,3 @@
   </tbody>
 </table>
 {% endblock %}
-

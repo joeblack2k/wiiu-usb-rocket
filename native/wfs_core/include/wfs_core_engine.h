@@ -33,6 +33,8 @@ class WfsCoreEngine {
   void create_file(const std::string& path, uint32_t size_hint);
   size_t write_stream(const std::string& path, const std::vector<std::byte>& data, uint32_t offset);
   void remove(const std::string& path);
+  std::vector<std::string> list_titles();
+  void remove_title(const std::string& title_id);
   void flush();
   IntegrityReport integrity_check(const std::string& scope);
   void detach();
@@ -43,4 +45,3 @@ class WfsCoreEngine {
   std::string fingerprint_;
   std::shared_ptr<WfsDevice> wfs_device_;
 };
-

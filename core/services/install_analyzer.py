@@ -14,7 +14,7 @@ class InstallAnalysis:
 
 
 class InstallAnalyzer:
-    def __init__(self, max_direct_file_bytes: int = 1024 * 1024):
+    def __init__(self, max_direct_file_bytes: int = 0):
         self._max_direct_file_bytes = max_direct_file_bytes
 
     def analyze(self, result: DownloadResult) -> InstallAnalysis:
@@ -29,11 +29,13 @@ class InstallAnalyzer:
             reasons.append("tmd_not_parsed")
             requires_fallback = True
 
-        oversize = [artifact for artifact in result.artifacts if artifact.size > self._max_direct_file_bytes]
-        if oversize:
-            reasons.append(
-                f"artifacts_exceed_direct_write_threshold:{len(oversize)}>{self._max_direct_file_bytes}"
-            )
+        if self._max_direct_file_bytes > 0:
+            oversize = [artifact for artifact in result.artifacts if artifact.size > self._max_direct_file_bytes]
+            if oversize:
+                reasons.append(
+                    f"artifacts_exceed_direct_write_threshold:{len(oversize)}>{self._max_direct_file_bytes}"
+                )
+                requires_fallback = True
 
         direct_possible = len(reasons) == 0
         return InstallAnalysis(
@@ -41,4 +43,3 @@ class InstallAnalyzer:
             requires_fallback=requires_fallback,
             reasons=reasons,
         )
-

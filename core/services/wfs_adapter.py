@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from core.config import Settings
 from core.crypto import OTP_SIZE, SEEPROM_SIZE, derive_usb_key, load_key_file
@@ -11,6 +11,17 @@ from core.crypto import OTP_SIZE, SEEPROM_SIZE, derive_usb_key, load_key_file
 
 class WfsAdapterError(RuntimeError):
     pass
+
+
+def _validate_title_id(title_id: str) -> str:
+    normalized = title_id.strip()
+    if not normalized:
+        raise WfsAdapterError("title_id must be non-empty")
+    if "/" in normalized or "\\" in normalized:
+        raise WfsAdapterError("title_id must not contain path separators")
+    if normalized in {".", ".."} or ".." in normalized:
+        raise WfsAdapterError("title_id must not contain traversal tokens")
+    return normalized
 
 
 @dataclass(slots=True)
@@ -48,6 +59,12 @@ class BaseWfsAdapter:
 
     def integrity_check(self, scope: str = "/") -> dict:
         raise NotImplementedError
+
+    def list_titles(self) -> list[str]:
+        raise WfsAdapterError(f"{self.backend_name} backend does not support list_titles")
+
+    def remove_title(self, title_id: str) -> None:
+        raise WfsAdapterError(f"{self.backend_name} backend does not support remove_title")
 
     def detach(self) -> None:
         raise NotImplementedError
@@ -100,6 +117,9 @@ class SimulatedWfsAdapter(BaseWfsAdapter):
         relative = path.strip()
         if not relative.startswith("/"):
             raise WfsAdapterError("WFS path must be absolute")
+        parts = PurePosixPath(relative).parts
+        if any(part in {".", ".."} for part in parts):
+            raise WfsAdapterError("WFS path traversal tokens are not allowed")
         full = (root / relative.lstrip("/")).resolve()
         if root.resolve() not in full.parents and full != root.resolve():
             raise WfsAdapterError("Path escapes mounted WFS root")
@@ -155,6 +175,15 @@ class SimulatedWfsAdapter(BaseWfsAdapter):
                 files += 1
                 total_bytes += file_path.stat().st_size
         return {"ok": True, "files": files, "bytes": total_bytes}
+
+    def list_titles(self) -> list[str]:
+        titles_root = self._resolve("/usr/title")
+        if not titles_root.exists() or not titles_root.is_dir():
+            return []
+        return sorted(entry.name for entry in titles_root.iterdir() if entry.is_dir())
+
+    def remove_title(self, title_id: str) -> None:
+        self.delete(f"/usr/title/{_validate_title_id(title_id)}")
 
     def detach(self) -> None:
         self._mounted = False
@@ -217,6 +246,21 @@ class NativeWfsAdapter(BaseWfsAdapter):
             return raw
         raise WfsAdapterError("Unexpected integrity response from native backend")
 
+    def list_titles(self) -> list[str]:
+        if not hasattr(self._engine, "list_titles"):
+            return []
+        raw = self._call_native("list_titles", self._engine.list_titles)
+        if not isinstance(raw, list):
+            raise WfsAdapterError("Native list_titles returned unexpected payload")
+        return [str(title_id) for title_id in raw]
+
+    def remove_title(self, title_id: str) -> None:
+        safe_title_id = _validate_title_id(title_id)
+        if hasattr(self._engine, "remove_title"):
+            self._call_native("remove_title", self._engine.remove_title, safe_title_id)
+            return
+        self.delete(f"/usr/title/{safe_title_id}")
+
     def detach(self) -> None:
         self._call_native("detach", self._engine.detach)
 
@@ -230,6 +274,10 @@ def build_wfs_adapter(settings: Settings) -> BaseWfsAdapter:
     if mode == "auto":
         try:
             return NativeWfsAdapter()
-        except WfsAdapterError:
+        except WfsAdapterError as exc:
+            if not settings.dry_run:
+                raise WfsAdapterError(
+                    "Auto WFS backend failed to initialize native backend while dry_run is disabled"
+                ) from exc
             return SimulatedWfsAdapter(settings)
     raise WfsAdapterError(f"Unknown WFS backend mode: {settings.wfs_backend}")

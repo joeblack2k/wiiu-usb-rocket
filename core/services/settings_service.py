@@ -14,7 +14,7 @@ class SettingsService:
         self.set_bool("dry_run", self._settings.dry_run)
         self.set_bool("first_write_confirmed", self._settings.first_write_confirmed)
         self._set_default("enable_downloads", True)
-        self._set_default("allow_fake_tickets", True)
+        self._set_default("allow_fake_tickets", False)
 
     def _set_default(self, key: str, value: bool) -> None:
         with session_scope() as session:
@@ -47,6 +47,5 @@ class SettingsService:
             "dry_run": self.get_bool("dry_run", self._settings.dry_run),
             "first_write_confirmed": self.get_bool("first_write_confirmed", self._settings.first_write_confirmed),
             "enable_downloads": self.get_bool("enable_downloads", True),
-            "allow_fake_tickets": self.get_bool("allow_fake_tickets", True),
+            "allow_fake_tickets": self.get_bool("allow_fake_tickets", False),
         }
-

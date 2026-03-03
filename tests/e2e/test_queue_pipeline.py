@@ -127,3 +127,62 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
 
     progress_event = queue_service.get_latest_event(result["job_id"], "download_progress")
     assert progress_event is not None
+
+
+def test_queue_pipeline_fails_when_manifest_entry_has_no_url(tmp_path: Path, monkeypatch) -> None:
+    otp_path, seeprom_path = write_keys(tmp_path)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        logs_dir=tmp_path / "logs",
+        db_url=f"sqlite:///{tmp_path / 'app.db'}",
+        otp_path=otp_path,
+        seeprom_path=seeprom_path,
+        wfs_backend="simulated",
+        dry_run=True,
+        allow_fallback=False,
+        nus_base_url="https://mirror.invalid",
+    )
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    settings.simulated_wfs_root.mkdir(parents=True, exist_ok=True)
+
+    init_engine(settings)
+    init_db()
+
+    settings_service = SettingsService(settings)
+    settings_service.bootstrap_defaults()
+
+    queue_service = QueueService()
+    download_service = DownloadService(settings)
+    monkeypatch.setattr(
+        download_service,
+        "_try_fetch_json",
+        lambda _url: {
+            "files": [
+                {
+                    "path": "content/00000000.app",
+                    "kind": "content",
+                }
+            ]
+        },
+    )
+
+    adapter = SimulatedWfsAdapter(settings)
+    adapter.attach("/dev/sim0", otp_path, seeprom_path)
+    writer = WriterEngine(adapter, queue_service, settings_service)
+    analyzer = InstallAnalyzer(max_direct_file_bytes=1024 * 1024)
+    worker = QueueWorker(queue_service, download_service, analyzer, writer, settings_service)
+
+    queue_item = queue_service.add_item("0005000010101A00", "EUR", "direct")
+    result = worker.execute_queue_item(queue_item["id"])
+
+    assert result["state"] == "FAILED"
+    assert "missing url" in result["error"].lower()
+
+    current_queue = queue_service.list_items()
+    assert current_queue[0]["state"] == "FAILED"
+
+    job = queue_service.get_job(result["job_id"])
+    assert job is not None
+    assert job["state"] == "FAILED"

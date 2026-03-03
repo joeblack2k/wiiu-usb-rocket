@@ -15,6 +15,9 @@ from core.nus.tmd import TmdError, TmdInfo, parse_tmd_bytes
 
 logger = logging.getLogger(__name__)
 
+_MIN_TMD_DOWNLOAD_SIZE = 0xB04
+_MIN_CETK_DOWNLOAD_SIZE = 0x1E4
+
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
@@ -162,13 +165,60 @@ class DownloadService:
             logger.debug("Manifest fetch failed: url=%s error=%s", url, exc)
             return None
 
-    def _try_fetch_binary(self, url: str, dest: Path, progress_callback: ProgressCallback | None = None) -> bool:
+    def _try_fetch_binary(
+        self,
+        url: str,
+        dest: Path,
+        progress_callback: ProgressCallback | None = None,
+        *,
+        min_size_bytes: int = 1,
+        artifact_kind: str = "binary",
+    ) -> bool:
         try:
             size = self._download_with_resume(url, dest, progress_callback=progress_callback)
-            return size > 0
+            if size < min_size_bytes:
+                logger.warning(
+                    "download.binary.too_small kind=%s url=%s path=%s size=%s minimum=%s",
+                    artifact_kind,
+                    url,
+                    dest,
+                    size,
+                    min_size_bytes,
+                )
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                    except OSError as exc:
+                        logger.debug("download.binary.cleanup_failed path=%s error=%s", dest, exc)
+                return False
+            return True
         except Exception as exc:
             logger.debug("Binary fetch failed: url=%s path=%s error=%s", url, dest, exc)
             return False
+
+    @staticmethod
+    def _artifact_names(artifact: DownloadedArtifact) -> set[str]:
+        return {
+            artifact.local_path.name.lower(),
+            Path(artifact.relative_path).name.lower(),
+            Path(artifact.target_path).name.lower(),
+        }
+
+    @classmethod
+    def _derive_metadata_presence(cls, artifacts: list[DownloadedArtifact]) -> tuple[bool, bool]:
+        tmd_present = False
+        ticket_present = False
+        for artifact in artifacts:
+            kind = artifact.kind.lower()
+            names = cls._artifact_names(artifact)
+
+            if kind == "tmd" or "tmd" in names or any(name.endswith(".tmd") for name in names):
+                tmd_present = True
+
+            if kind == "ticket" or "cetk" in names or any(name.endswith(".tik") for name in names):
+                ticket_present = True
+
+        return tmd_present, ticket_present
 
     def _materialize_manifest(
         self,
@@ -181,17 +231,16 @@ class DownloadService:
         for index, file_spec in enumerate(files):
             if not isinstance(file_spec, dict):
                 continue
-            source_url = str(file_spec.get("url", ""))
             relative_path = str(file_spec.get("path", f"content/{index:04x}.bin"))
             target_path = str(file_spec.get("target_path", f"/usr/title/{title_id}/{relative_path}"))
             kind = str(file_spec.get("kind", "content"))
+            source_url = str(file_spec.get("url", "")).strip()
+
+            if not source_url:
+                raise RuntimeError(f"Manifest file entry missing url for {relative_path}")
 
             local_path = work_dir / relative_path
-            if source_url:
-                self._download_with_resume(source_url, local_path)
-            else:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(b"")
+            self._download_with_resume(source_url, local_path)
 
             size = local_path.stat().st_size
             sha256 = self._hash_file(local_path)
@@ -287,9 +336,9 @@ class DownloadService:
             manifest = self._try_fetch_json(manifest_url)
             if manifest is not None:
                 logger.info("download.manifest.hit title_id=%s url=%s", title_id, manifest_url)
-                artifacts.extend(self._materialize_manifest(title_id, manifest, work_dir))
-                tmd_present = bool(manifest.get("tmd_present", False))
-                ticket_present = bool(manifest.get("ticket_present", False))
+                manifest_artifacts = self._materialize_manifest(title_id, manifest, work_dir)
+                artifacts.extend(manifest_artifacts)
+                tmd_present, ticket_present = self._derive_metadata_presence(manifest_artifacts)
 
             if not artifacts:
                 tmd_path = work_dir / "tmd"
@@ -305,6 +354,8 @@ class DownloadService:
                         phase_start=0.0,
                         phase_span=0.05,
                     ),
+                    min_size_bytes=_MIN_TMD_DOWNLOAD_SIZE,
+                    artifact_kind="tmd",
                 )
 
                 logger.info("download.ticket.start title_id=%s", title_id)
@@ -317,6 +368,8 @@ class DownloadService:
                         phase_start=0.05,
                         phase_span=0.05,
                     ),
+                    min_size_bytes=_MIN_CETK_DOWNLOAD_SIZE,
+                    artifact_kind="ticket",
                 )
 
                 if tmd_present:

@@ -12,6 +12,7 @@ from core.services.download_service import DownloadService
 from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
 from core.services.settings_service import SettingsService
+from core.services.wfs_adapter import WfsAdapterError
 from core.services.writer_engine import WriterEngine
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,18 @@ class QueueWorker:
         queue_item_id = queue_item["id"]
         title_id = queue_item["title_id"]
         region = queue_item["region"]
+        preferred_mode = str(queue_item.get("preferred_mode", "direct")).lower()
 
         job = self._queue_service.create_job(queue_item_id, phase="queued", progress=0.0)
         job_id = job["job_id"]
-        logger.info("job.start job_id=%s queue_item_id=%s title_id=%s region=%s", job_id, queue_item_id, title_id, region)
+        logger.info(
+            "job.start job_id=%s queue_item_id=%s title_id=%s region=%s preferred_mode=%s",
+            job_id,
+            queue_item_id,
+            title_id,
+            region,
+            preferred_mode,
+        )
 
         try:
             self._queue_service.set_state(queue_item_id, QueueState.DOWNLOADING, progress=0.1)
@@ -161,6 +170,7 @@ class QueueWorker:
                     return {"job_id": job_id, "state": QueueState.FAILED.value, "error": error_text}
 
                 decrypted_artifacts = []
+                hash_mismatch_count = 0
                 for artifact in download_result.artifacts:
                     if artifact.kind != "content":
                         decrypted_artifacts.append(artifact)
@@ -175,20 +185,42 @@ class QueueWorker:
                     dec_path = artifact.local_path.with_suffix(".dec")
                     written = decrypt_app(artifact.local_path, dec_path, ticket_info.title_key, content_record.index)
                     if content_record.size < written:
-                        with dec_path.open("r+b") as fh:
-                            fh.truncate(content_record.size)
+                        with dec_path.open("r+b") as handle:
+                            handle.truncate(content_record.size)
                         written = content_record.size
+
                     if content_record.content_hash and not download_result.fake_ticket:
                         if content_record.hash_algo == "sha256":
                             digest = hashlib.sha256()
                         else:
                             digest = hashlib.sha1()
-                        with dec_path.open("rb") as fh:
-                            for chunk in iter(lambda: fh.read(65536), b""):
+                        with dec_path.open("rb") as handle:
+                            for chunk in iter(lambda: handle.read(65536), b""):
                                 digest.update(chunk)
                         actual_hash = digest.hexdigest()
                         expected_hash = content_record.content_hash.hex()
-                        if actual_hash != expected_hash:
+
+                        matched = actual_hash == expected_hash
+                        if not matched and content_record.hash_algo == "sha256" and len(content_record.content_hash) == 32:
+                            sha1_digest = hashlib.sha1()
+                            with dec_path.open("rb") as handle:
+                                for chunk in iter(lambda: handle.read(65536), b""):
+                                    sha1_digest.update(chunk)
+                            sha1_hash = sha1_digest.hexdigest()
+                            if expected_hash.startswith(sha1_hash):
+                                matched = True
+                                self._queue_service.add_job_event(
+                                    job_id,
+                                    "hash_algo_adjusted",
+                                    {
+                                        "content_id": content_record.content_id_hex,
+                                        "from": "sha256",
+                                        "to": "sha1_prefix",
+                                    },
+                                )
+
+                        if not matched:
+                            hash_mismatch_count += 1
                             self._queue_service.add_job_event(
                                 job_id,
                                 "hash_mismatch",
@@ -207,12 +239,30 @@ class QueueWorker:
                                 content_record.content_id_hex,
                                 content_record.hash_algo,
                             )
-                    decrypted_artifacts.append(dataclasses.replace(artifact, local_path=dec_path, size=written))
+
+                    sha256_digest = hashlib.sha256()
+                    with dec_path.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(65536), b""):
+                            sha256_digest.update(chunk)
+
+                    decrypted_artifacts.append(
+                        dataclasses.replace(
+                            artifact,
+                            local_path=dec_path,
+                            size=written,
+                            sha256=sha256_digest.hexdigest(),
+                        )
+                    )
+
                 download_result = dataclasses.replace(download_result, artifacts=decrypted_artifacts)
                 self._queue_service.add_job_event(
                     job_id,
                     "decrypt",
-                    {"mode": "aes_cbc", "artifacts": len(decrypted_artifacts)},
+                    {
+                        "mode": "aes_cbc",
+                        "artifacts": len(decrypted_artifacts),
+                        "hash_mismatch_count": hash_mismatch_count,
+                    },
                 )
             else:
                 self._queue_service.add_job_event(
@@ -228,6 +278,7 @@ class QueueWorker:
             diagnostics = {
                 "analysis": analysis.to_dict(),
                 "allow_fallback": allow_fallback,
+                "preferred_mode": preferred_mode,
                 "download": {
                     "title_id": download_result.title_id,
                     "region": download_result.region,
@@ -237,6 +288,45 @@ class QueueWorker:
                     "fake_ticket": download_result.fake_ticket,
                 },
             }
+
+            force_fallback = preferred_mode == "fallback"
+            if force_fallback and not allow_fallback:
+                diagnostics["error"] = "FALLBACK_DISABLED"
+                self._queue_service.set_state(
+                    queue_item_id,
+                    QueueState.FAILED,
+                    progress=1.0,
+                    error_code="FALLBACK_DISABLED",
+                    error_detail="preferred_mode=fallback but allow_fallback is disabled",
+                )
+                self._queue_service.update_job(
+                    job_id,
+                    phase="failed",
+                    progress=1.0,
+                    state=JobState.FAILED,
+                    message="Fallback requested but fallback is disabled in settings",
+                    diagnostics=diagnostics,
+                )
+                logger.warning("job.failed job_id=%s title_id=%s reason=FALLBACK_DISABLED", job_id, title_id)
+                return {"job_id": job_id, "state": QueueState.FAILED.value}
+
+            if force_fallback and allow_fallback:
+                self._queue_service.set_state(queue_item_id, QueueState.FALLBACK_STAGED, progress=0.75)
+                self._queue_service.update_job(job_id, phase="fallback_staged", progress=0.75)
+                report = self._writer_engine.write_download_result(job_id, download_result, fallback=True)
+                diagnostics["write_report"] = report
+
+                self._queue_service.set_state(queue_item_id, QueueState.DONE, progress=1.0)
+                self._queue_service.update_job(
+                    job_id,
+                    phase="done",
+                    progress=1.0,
+                    state=JobState.DONE,
+                    message="Fallback staged install completed (preferred mode)",
+                    diagnostics=diagnostics,
+                )
+                logger.info("job.done job_id=%s title_id=%s mode=fallback(preferred)", job_id, title_id)
+                return {"job_id": job_id, "state": QueueState.DONE.value}
 
             if analysis.direct_playable_possible:
                 self._queue_service.set_state(queue_item_id, QueueState.WRITING_WFS, progress=0.65)
@@ -277,12 +367,18 @@ class QueueWorker:
                 logger.info("job.done job_id=%s title_id=%s mode=fallback", job_id, title_id)
                 return {"job_id": job_id, "state": QueueState.DONE.value}
 
-            diagnostics["error"] = "USB_ONLY_IMPOSSIBLE"
+            error_code = "FALLBACK_REQUIRED" if analysis.requires_fallback else "USB_ONLY_IMPOSSIBLE"
+            message = (
+                "Direct install not possible; enable fallback"
+                if analysis.requires_fallback
+                else "Direct playable install is impossible on USB-only path"
+            )
+            diagnostics["error"] = error_code
             self._queue_service.set_state(
                 queue_item_id,
                 QueueState.FAILED,
                 progress=1.0,
-                error_code="USB_ONLY_IMPOSSIBLE",
+                error_code=error_code,
                 error_detail=json.dumps(analysis.to_dict()),
             )
             self._queue_service.update_job(
@@ -290,27 +386,37 @@ class QueueWorker:
                 phase="failed",
                 progress=1.0,
                 state=JobState.FAILED,
-                message="Direct playable install is impossible on USB-only path",
+                message=message,
                 diagnostics=diagnostics,
             )
-            logger.warning("job.failed job_id=%s title_id=%s reason=USB_ONLY_IMPOSSIBLE", job_id, title_id)
+            logger.warning("job.failed job_id=%s title_id=%s reason=%s", job_id, title_id, error_code)
             return {"job_id": job_id, "state": QueueState.FAILED.value}
+
         except Exception as exc:
             logger.exception("job.failed job_id=%s title_id=%s error=%s", job_id, title_id, exc)
+            error_text = str(exc)
+            error_code = "INSTALL_FAILED"
+            if isinstance(exc, WfsAdapterError):
+                lowered = error_text.lower()
+                if "first-write confirmation" in lowered:
+                    error_code = "WRITE_CONFIRM_REQUIRED"
+                elif "no active wfs attachment" in lowered:
+                    error_code = "DISK_NOT_ATTACHED"
+
             self._queue_service.set_state(
                 queue_item_id,
                 QueueState.FAILED,
                 progress=1.0,
-                error_code="INSTALL_FAILED",
-                error_detail=str(exc),
+                error_code=error_code,
+                error_detail=error_text,
             )
             self._queue_service.update_job(
                 job_id,
                 phase="failed",
                 progress=1.0,
                 state=JobState.FAILED,
-                message=str(exc),
-                diagnostics={"error": str(exc)},
+                message=error_text,
+                diagnostics={"error": error_text, "error_code": error_code},
             )
-            self._queue_service.add_job_event(job_id, "error", {"message": str(exc)}, level="ERROR")
-            return {"job_id": job_id, "state": QueueState.FAILED.value, "error": str(exc)}
+            self._queue_service.add_job_event(job_id, "error", {"message": error_text}, level="ERROR")
+            return {"job_id": job_id, "state": QueueState.FAILED.value, "error": error_text}

@@ -24,17 +24,18 @@ Dockerized FastAPI + worker application that manages a web queue, fetches catalo
 docker compose up --build
 ```
 
-3. Open:
-   - API docs: `http://localhost:8080/docs`
-   - Web UI: `http://localhost:8080/`
+3. Open (default compose port):
+   - API docs: `http://localhost:18080/docs`
+   - Web UI: `http://localhost:18080/`
 
 ## Environment
 
 - `WIIU_DISK=/dev/sdX` optional default target.
-- `ALLOW_FALLBACK=true|false` default `false`.
-- `WFS_BACKEND=auto|native|simulated` default `auto`.
-- `DRY_RUN=true|false` default `true`.
-- `FIRST_WRITE_CONFIRMED=true|false` default `false`.
+- `WIIU_COMMON_KEY=<32 hex chars>` required for encrypted title decryption.
+- `ALLOW_FALLBACK=true|false` app default `false` (compose default `true`).
+- `WFS_BACKEND=auto|native|simulated` app default `auto` (compose default `native`).
+- `DRY_RUN=true|false` app default `true` (compose default `false`).
+- `FIRST_WRITE_CONFIRMED=true|false` app default `false` (compose default `true`).
 
 ## Development (local)
 

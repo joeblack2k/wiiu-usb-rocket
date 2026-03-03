@@ -22,6 +22,13 @@ class DiskService:
         self._settings = settings
         self._wfs_adapter = wfs_adapter
 
+    @property
+    def backend_name(self) -> str:
+        return self._wfs_adapter.backend_name
+
+    def keys_status(self) -> tuple[bool, str | None]:
+        return self._keys_ok()
+
     def _is_block_device(self, path: str) -> bool:
         try:
             mode = os.stat(path).st_mode

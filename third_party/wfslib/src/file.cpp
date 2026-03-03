@@ -7,8 +7,11 @@
 
 #include "file.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <ranges>
+#include <type_traits>
 #include "block.h"
 #include "quota_area.h"
 #include "structs.h"
@@ -125,21 +128,44 @@ class File::RegularDataCategoryReader : public File::DataCategoryReader {
                                size_t offset_in_block,
                                size_t size,
                                const std::shared_ptr<Block>& hash_block,
-                               const uint8_be_t* hash) {
+                               const uint8_be_t* hash,
+                               bool new_block = false) {
+    bool hash_uninitialized = true;
+    for (size_t i = 0; i < 20; ++i) {
+      if (hash[i].value() != 0) {
+        hash_uninitialized = false;
+        break;
+      }
+    }
+
+    auto data_size = std::min(uint32_t{1} << GetDataBlockSize(),
+                              static_cast<uint32_t>(file_->metadata()->file_size.value() - block_offset));
+    if (data_size == 0) {
+      data_size = 1;
+    }
+
     LoadDataBlock(block_number,
-                  std::min(uint32_t{1} << GetDataBlockSize(),
-                           static_cast<uint32_t>(file_->metadata()->file_size.value() - block_offset)),
-                  {hash_block, hash_block->to_offset(hash)});
+                  data_size,
+                  {hash_block, hash_block->to_offset(hash)},
+                  new_block || hash_uninitialized);
     size = std::min(size, current_data_block->size() - offset_in_block);
     return {current_data_block, offset_in_block, size};
   }
 
   virtual FileDataRef GetFileDataRef(size_t offset, size_t size) {
-    auto blocks_list = GetMetadata<const DataBlockMetadata, true>();
+    auto blocks_list = GetMetadata<DataBlockMetadata, true>();
     auto [block_index, offset_in_block] = div_pow2(offset, GetDataBlockSize());
     auto block_offset = floor_pow2(offset, GetDataBlockSize());
-    return GetDataFromBlock(blocks_list[block_index].block_number.value(), block_offset, offset_in_block, size,
-                            file_->metadata_block(), blocks_list[block_index].hash);
+    auto& block_entry = blocks_list[block_index];
+    bool allocated_now = false;
+    EnsureDataBlockAllocated(block_entry, allocated_now);
+    return GetDataFromBlock(block_entry.block_number.value(),
+                            block_offset,
+                            offset_in_block,
+                            size,
+                            file_->metadata_block(),
+                            block_entry.hash,
+                            allocated_now);
   }
 
   void Resize(size_t new_size) override {
@@ -186,16 +212,35 @@ class File::RegularDataCategoryReader : public File::DataCategoryReader {
   virtual size_t GetDataBlockSize() const { return file_->quota()->block_size_log2() + log2_size(GetDataBlockType()); }
   std::shared_ptr<Block> current_data_block;
 
-  void LoadDataBlock(uint32_t block_number, uint32_t data_size, Block::HashRef data_hash) {
+  void LoadDataBlock(uint32_t block_number, uint32_t data_size, Block::HashRef data_hash, bool new_block = false) {
     if (current_data_block &&
         file_->quota()->to_area_block_number(current_data_block->physical_block_number()) == block_number)
       return;
-    auto block = file_->quota()->LoadDataBlock(block_number, static_cast<BlockSize>(file_->quota()->block_size_log2()),
-                                               GetDataBlockType(), data_size, std::move(data_hash),
-                                               !(file_->metadata()->flags.value() & EntryMetadata::UNENCRYPTED_FILE));
+    auto block = file_->quota()->LoadDataBlock(block_number,
+                                               static_cast<BlockSize>(file_->quota()->block_size_log2()),
+                                               GetDataBlockType(),
+                                               data_size,
+                                               std::move(data_hash),
+                                               !(file_->metadata()->flags.value() & EntryMetadata::UNENCRYPTED_FILE),
+                                               new_block);
     if (!block.has_value())
       throw WfsException(WfsError::kFileDataCorrupted);
     current_data_block = std::move(*block);
+  }
+
+  void EnsureDataBlockAllocated(DataBlockMetadata& entry, bool& allocated_now) {
+    if (entry.block_number.value() != 0) {
+      return;
+    }
+
+    auto blocks = file_->quota()->AllocDataBlocks(1, GetDataBlockType());
+    if (!blocks.has_value() || blocks->empty()) {
+      throw WfsException(blocks.has_value() ? WfsError::kNoSpace : blocks.error());
+    }
+
+    entry.block_number = (*blocks)[0];
+    std::memset(entry.hash, 0, sizeof(entry.hash));
+    allocated_now = true;
   }
 };
 
@@ -234,7 +279,7 @@ class File::DataCategory3Reader : public File::DataCategory2Reader {
   FileDataRef GetFileDataRef(size_t offset, size_t size) override {
     return GetFileDataRefFromClustersList(
         /*cluster_list_start=*/0, offset, size, file_->metadata_block(),
-        GetMetadata<const DataBlocksClusterMetadata, true>());
+        GetMetadata<DataBlocksClusterMetadata, true>());
   }
 
  protected:
@@ -248,13 +293,39 @@ class File::DataCategory3Reader : public File::DataCategory2Reader {
     auto [cluster_index, offset_in_cluster] = div_pow2(offset_in_cluster_list, ClusterDataLog2Size());
     auto [block_index, offset_in_block] = div_pow2(offset_in_cluster, GetDataBlockSize());
     auto block_offset = floor_pow2(offset, GetDataBlockSize());
-    return GetDataFromBlock(clusters_list[cluster_index].block_number.value() +
+
+    auto& cluster = clusters_list[cluster_index];
+    bool allocated_now = false;
+    if constexpr (!std::is_const_v<std::remove_reference_t<decltype(cluster)>>) {
+      EnsureClusterAllocated(cluster, allocated_now);
+    }
+
+    return GetDataFromBlock(cluster.block_number.value() +
                                 static_cast<uint32_t>(block_index << log2_size(GetDataBlockType())),
-                            block_offset, offset_in_block, size, metadata_block,
-                            clusters_list[cluster_index].hash[block_index]);
+                            block_offset,
+                            offset_in_block,
+                            size,
+                            metadata_block,
+                            cluster.hash[block_index],
+                            allocated_now);
   }
 
   size_t ClusterDataLog2Size() const { return file_->quota()->block_size_log2() + log2_size(BlockType::Cluster); }
+
+  void EnsureClusterAllocated(DataBlocksClusterMetadata& cluster, bool& allocated_now) {
+    if (cluster.block_number.value() != 0) {
+      return;
+    }
+
+    auto blocks = file_->quota()->AllocDataBlocks(1, BlockType::Cluster);
+    if (!blocks.has_value() || blocks->empty()) {
+      throw WfsException(blocks.has_value() ? WfsError::kNoSpace : blocks.error());
+    }
+
+    cluster.block_number = (*blocks)[0];
+    std::memset(cluster.hash, 0, sizeof(cluster.hash));
+    allocated_now = true;
+  }
 };
 
 // Category 4 - File data in clusters of large block (8 large blocksblocks), in the attribute metadata there is list of
@@ -271,14 +342,31 @@ class File::DataCategory4Reader : public File::DataCategory3Reader {
   }
 
   FileDataRef GetFileDataRef(size_t offset, size_t size) override {
-    auto blocks_list = GetMetadata<const uint32_be_t, true>();
+    auto blocks_list = GetMetadata<uint32_be_t, true>();
     auto cluster_index = offset >> ClusterDataLog2Size();
-    int64_t block_index = cluster_index / ClustersInBlock();
-    LoadMetadataBlock(blocks_list[block_index].value());
+    size_t block_index = cluster_index / ClustersInBlock();
+
+    auto& metadata_block_number = blocks_list[block_index];
+    if (metadata_block_number.value() == 0) {
+      auto metadata_block = file_->quota()->AllocMetadataBlock();
+      if (!metadata_block.has_value()) {
+        throw WfsException(metadata_block.error());
+      }
+
+      metadata_block_number = file_->quota()->to_area_block_number((*metadata_block)->physical_block_number());
+      auto block_data = (*metadata_block)->mutable_data();
+      std::fill(block_data.begin() + sizeof(MetadataBlockHeader), block_data.end(), std::byte{0});
+      current_metadata_block = std::move(*metadata_block);
+    }
+
+    LoadMetadataBlock(metadata_block_number.value());
     return GetFileDataRefFromClustersList(
-        block_index * ClustersInBlock(), offset, size, current_metadata_block,
-        std::span<const DataBlocksClusterMetadata>{
-            current_metadata_block->get_object<DataBlocksClusterMetadata>(sizeof(MetadataBlockHeader)),
+        block_index * ClustersInBlock(),
+        offset,
+        size,
+        current_metadata_block,
+        std::span<DataBlocksClusterMetadata>{
+            current_metadata_block->get_mutable_object<DataBlocksClusterMetadata>(sizeof(MetadataBlockHeader)),
             ClustersInBlock()});
   }
 
