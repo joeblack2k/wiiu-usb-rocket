@@ -1,8 +1,11 @@
+import dataclasses
 import json
 import threading
 import time
 
 from core.models.enums import JobState, QueueState
+from core.nus.app_decryptor import decrypt_app
+from core.nus.ticket import parse_ticket_bytes
 from core.services.download_service import DownloadService
 from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
@@ -91,11 +94,39 @@ class QueueWorker:
 
             self._queue_service.set_state(queue_item_id, QueueState.DECRYPTING, progress=0.5)
             self._queue_service.update_job(job_id, phase="decrypting", progress=0.5)
-            self._queue_service.add_job_event(
-                job_id,
-                "decrypt",
-                {"mode": "passthrough", "artifacts": len(download_result.artifacts)},
-            )
+
+            if download_result.cetk_bytes and download_result.tmd_info is not None:
+                ticket_info = parse_ticket_bytes(download_result.cetk_bytes)
+                decrypted_artifacts = []
+                for artifact in download_result.artifacts:
+                    if artifact.kind != "content":
+                        decrypted_artifacts.append(artifact)
+                        continue
+                    content_record = next(
+                        (r for r in download_result.tmd_info.contents
+                         if r.content_id_hex == artifact.local_path.stem),
+                        None,
+                    )
+                    if content_record is None:
+                        decrypted_artifacts.append(artifact)
+                        continue
+                    dec_path = artifact.local_path.with_suffix(".dec")
+                    written = decrypt_app(
+                        artifact.local_path, dec_path, ticket_info.title_key, content_record.index
+                    )
+                    decrypted_artifacts.append(dataclasses.replace(artifact, local_path=dec_path, size=written))
+                download_result = dataclasses.replace(download_result, artifacts=decrypted_artifacts)
+                self._queue_service.add_job_event(
+                    job_id,
+                    "decrypt",
+                    {"mode": "aes_cbc", "artifacts": len(decrypted_artifacts)},
+                )
+            else:
+                self._queue_service.add_job_event(
+                    job_id,
+                    "decrypt",
+                    {"mode": "passthrough", "artifacts": len(download_result.artifacts)},
+                )
 
             analysis = self._analyzer.analyze(download_result)
             self._queue_service.add_job_event(job_id, "analysis", analysis.to_dict())

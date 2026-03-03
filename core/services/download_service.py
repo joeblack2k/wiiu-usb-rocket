@@ -170,6 +170,24 @@ class DownloadService:
                         )
                     )
 
+                if tmd_info is not None:
+                    for record in tmd_info.contents:
+                        content_path = work_dir / f"{record.content_id_hex}.app"
+                        self._download_with_resume(
+                            f"{base}/{title_id}/{record.content_id_hex}",
+                            content_path,
+                        )
+                        artifacts.append(
+                            DownloadedArtifact(
+                                kind="content",
+                                local_path=content_path,
+                                relative_path=f"content/{record.content_id_hex}.app",
+                                target_path=f"/usr/title/{title_id}/content/{record.content_id_hex}.app",
+                                size=content_path.stat().st_size,
+                                sha256=self._hash_file(content_path),
+                            )
+                        )
+
         if not artifacts:
             content = work_dir / "content.bin"
             payload = json.dumps(
