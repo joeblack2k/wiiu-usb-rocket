@@ -13,6 +13,12 @@ class SettingsService:
         self.set_bool("allow_fallback", self._settings.allow_fallback)
         self.set_bool("dry_run", self._settings.dry_run)
         self.set_bool("first_write_confirmed", self._settings.first_write_confirmed)
+        self._set_default("enable_downloads", True)
+
+    def _set_default(self, key: str, value: bool) -> None:
+        with session_scope() as session:
+            if session.get(Setting, key) is None:
+                session.add(Setting(key=key, value_json=json.dumps(value)))
 
     def get_bool(self, key: str, default: bool = False) -> bool:
         with session_scope() as session:
@@ -39,5 +45,6 @@ class SettingsService:
             "allow_fallback": self.get_bool("allow_fallback", self._settings.allow_fallback),
             "dry_run": self.get_bool("dry_run", self._settings.dry_run),
             "first_write_confirmed": self.get_bool("first_write_confirmed", self._settings.first_write_confirmed),
+            "enable_downloads": self.get_bool("enable_downloads", True),
         }
 

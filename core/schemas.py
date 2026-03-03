@@ -16,3 +16,7 @@ class DiskAttachRequest(BaseModel):
 class FallbackSettingsRequest(BaseModel):
     allow_fallback: bool
 
+
+class EnableDownloadsRequest(BaseModel):
+    enable_downloads: bool
+

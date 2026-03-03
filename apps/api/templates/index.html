@@ -20,7 +20,18 @@
 </form>
 
 <h2>Catalog</h2>
-<p class="small">Total: {{ catalog["total"] }} | Source age: {{ catalog["source_age_sec"] }} sec</p>
+<div class="controls" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
+  <p class="small" style="margin:0;">Total: {{ catalog["total"] }} | Source age: {{ catalog["source_age_sec"] }} sec</p>
+  <form method="post" action="/settings/downloads" style="margin:0;">
+    <input type="hidden" name="enable_downloads" value="{{ 'false' if settings.enable_downloads else 'true' }}" />
+    <input type="hidden" name="search" value="{{ search }}" />
+    <input type="hidden" name="region" value="{{ region }}" />
+    <input type="hidden" name="category" value="{{ category }}" />
+    <button type="submit" style="background:{{ '#16a34a' if settings.enable_downloads else '#dc2626' }};color:#fff;border:none;padding:0.3rem 0.9rem;cursor:pointer;">
+      Downloads: {{ "YES" if settings.enable_downloads else "NO" }}
+    </button>
+  </form>
+</div>
 <table>
   <thead>
     <tr>
@@ -39,15 +50,19 @@
         <td>{{ item.region }}</td>
         <td>{{ item.category }}</td>
         <td>
-          <form method="post" action="/queue/add">
-            <input type="hidden" name="title_id" value="{{ item.title_id }}" />
-            <input type="hidden" name="region" value="{{ item.region }}" />
-            <select name="preferred_mode">
-              <option value="direct">direct</option>
-              <option value="fallback">fallback</option>
-            </select>
-            <button type="submit">Add</button>
-          </form>
+          {% if settings.enable_downloads %}
+            <form method="post" action="/queue/add">
+              <input type="hidden" name="title_id" value="{{ item.title_id }}" />
+              <input type="hidden" name="region" value="{{ item.region }}" />
+              <select name="preferred_mode">
+                <option value="direct">direct</option>
+                <option value="fallback">fallback</option>
+              </select>
+              <button type="submit">Add</button>
+            </form>
+          {% else %}
+            <span class="small" style="color:#94a3b8;">disabled</span>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}

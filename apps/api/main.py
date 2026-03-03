@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from apps.worker.runner import QueueWorker
 from core.config import get_settings
 from core.db import init_db, init_engine
-from core.schemas import DiskAttachRequest, FallbackSettingsRequest, QueueItemCreateRequest
+from core.schemas import DiskAttachRequest, EnableDownloadsRequest, FallbackSettingsRequest, QueueItemCreateRequest
 from core.services.catalog_service import CatalogService
 from core.services.disk_service import DiskService
 from core.services.download_service import DownloadService
@@ -211,6 +211,29 @@ def api_settings_fallback(request: Request, payload: FallbackSettingsRequest) ->
     services = get_services(request)
     value = services["settings_service"].set_bool("allow_fallback", payload.allow_fallback)
     return {"allow_fallback": value}
+
+
+@app.post("/api/settings/downloads")
+def api_settings_downloads(request: Request, payload: EnableDownloadsRequest) -> dict:
+    services = get_services(request)
+    value = services["settings_service"].set_bool("enable_downloads", payload.enable_downloads)
+    return {"enable_downloads": value}
+
+
+@app.post("/settings/downloads")
+def ui_settings_downloads(
+    request: Request,
+    enable_downloads: bool = Form(...),
+    search: str = Form(""),
+    region: str = Form(""),
+    category: str = Form(""),
+) -> RedirectResponse:
+    services = get_services(request)
+    services["settings_service"].set_bool("enable_downloads", enable_downloads)
+    params = "&".join(
+        f"{k}={v}" for k, v in [("search", search), ("region", region), ("category", category)] if v
+    )
+    return RedirectResponse(url=f"/?{params}" if params else "/", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)
