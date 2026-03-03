@@ -20,6 +20,7 @@ target_include_directories(wfs_core_native
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${WFSLIB_DIR}/src
+    ${WFSLIB_DIR}/include/wfslib
 )
 
 target_link_libraries(wfs_core_native
