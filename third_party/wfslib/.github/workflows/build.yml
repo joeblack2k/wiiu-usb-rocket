@@ -1,0 +1,84 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  LLVM_VERSION: 19
+  GCC_VERSION: 14
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+        compiler: [msvc, gcc, llvm]
+        config: [debug, release]
+        exclude:
+          - platform: windows-latest
+            compiler: gcc
+          - platform: windows-latest
+            compiler: llvm
+          - platform: ubuntu-latest
+            compiler: msvc
+          - platform: macos-latest
+            compiler: msvc
+          - platform: macos-latest
+            compiler: gcc
+    runs-on: ${{matrix.platform}}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "true"
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Run vcpkg
+        uses: lukka/run-vcpkg@v11
+
+      - name: Set gcc
+        run: |
+          sudo add-apt-repository "deb http://archive.ubuntu.com/ubuntu/ noble main universe"
+          sudo apt update
+          sudo apt install gcc-$GCC_VERSION g++-$GCC_VERSION
+          echo "CC=gcc-$GCC_VERSION" >> $GITHUB_ENV
+          echo "CXX=g++-$GCC_VERSION" >> $GITHUB_ENV
+        shell: bash
+        if: matrix.platform == 'ubuntu-latest' && matrix.compiler == 'gcc'
+
+      - name: Set llvm (Ubuntu)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh $LLVM_VERSION
+          sudo apt install libc++-$LLVM_VERSION-dev
+          echo "CC=clang-$LLVM_VERSION" >> $GITHUB_ENV
+          echo "CXX=clang++-$LLVM_VERSION" >> $GITHUB_ENV
+        shell: bash
+        if: matrix.platform == 'ubuntu-latest' && matrix.compiler == 'llvm'
+
+      - name: Set llvm (macOS)
+        run: |
+          brew update
+          brew install llvm@$LLVM_VERSION
+          echo "CC=$(brew --prefix llvm@$LLVM_VERSION)/bin/clang" >> $GITHUB_ENV
+          echo "CXX=$(brew --prefix llvm@$LLVM_VERSION)/bin/clang++" >> $GITHUB_ENV
+        shell: bash
+        if: matrix.platform == 'macos-latest'
+
+      - name: Build
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: "tests"
+          buildPreset: "${{matrix.config}}-tests"
+
+      - name: Run tests
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: "tests"
+          testPreset: "run-${{matrix.config}}-tests"
+        if: matrix.config == 'release'

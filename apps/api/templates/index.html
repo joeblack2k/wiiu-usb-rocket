@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not disk %}
+  <div class="warn">No disk attached. Attach a verified WFS disk before writes.</div>
+{% else %}
+  <div class="ok">Active disk: <code>{{ disk.device_path }}</code> | key_verified={{ disk.key_verified }} | wfs_verified={{ disk.wfs_verified }}</div>
+{% endif %}
+
+{% if not settings.first_write_confirmed and not settings.dry_run %}
+  <div class="warn">First-write confirmation is not set. Writes are blocked until enabled.</div>
+{% endif %}
+
+<div class="warn">Risk banner: direct playable writes may be technically impossible for some titles. Fallback is currently <strong>{{ "ON" if settings.allow_fallback else "OFF" }}</strong>.</div>
+
+<form method="get" action="/">
+  <label>Search <input type="text" name="search" value="{{ search }}" /></label>
+  <label>Region <input type="text" name="region" value="{{ region }}" /></label>
+  <label>Category <input type="text" name="category" value="{{ category }}" /></label>
+  <button type="submit">Filter</button>
+</form>
+
+<h2>Catalog</h2>
+<p class="small">Total: {{ catalog.total }} | Source age: {{ catalog.source_age_sec }} sec</p>
+<table>
+  <thead>
+    <tr>
+      <th>Title ID</th>
+      <th>Name</th>
+      <th>Region</th>
+      <th>Category</th>
+      <th>Queue</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in catalog.items %}
+      <tr>
+        <td><code>{{ item.title_id }}</code></td>
+        <td>{{ item.name }}</td>
+        <td>{{ item.region }}</td>
+        <td>{{ item.category }}</td>
+        <td>
+          <form method="post" action="/queue/add">
+            <input type="hidden" name="title_id" value="{{ item.title_id }}" />
+            <input type="hidden" name="region" value="{{ item.region }}" />
+            <select name="preferred_mode">
+              <option value="direct">direct</option>
+              <option value="fallback">fallback</option>
+            </select>
+            <button type="submit">Add</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Queue</h2>
+<div class="controls">
+  <form method="post" action="/api/queue/start" style="display:inline">
+    <button type="submit">Start Worker</button>
+  </form>
+  <form method="post" action="/api/queue/pause" style="display:inline">
+    <button type="submit">Pause Worker</button>
+  </form>
+</div>
+<p>Worker running: <strong>{{ worker_running }}</strong></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Title</th>
+      <th>State</th>
+      <th>Progress</th>
+      <th>Error</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for q in queue_items %}
+      <tr>
+        <td><code>{{ q.id }}</code></td>
+        <td><code>{{ q.title_id }}</code></td>
+        <td>{{ q.state }}</td>
+        <td>{{ (q.progress * 100) | round(1) }}%</td>
+        <td>{{ q.error_code or "" }}</td>
+        <td>
+          <form method="post" action="/api/install/{{ q.id }}/execute">
+            <button type="submit">Execute now</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

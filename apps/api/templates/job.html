@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Job <code>{{ job.job_id }}</code></h2>
+<p>State: <strong>{{ job.state }}</strong> | Phase: {{ job.phase }} | Progress: {{ (job.progress * 100) | round(1) }}%</p>
+<p>Message: {{ job.message or "" }}</p>
+<h3>Diagnostics</h3>
+<pre>{{ job.diagnostics | tojson(indent=2) }}</pre>
+<h3>Events</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Type</th>
+      <th>Level</th>
+      <th>Payload</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+      <tr>
+        <td>{{ event.ts }}</td>
+        <td>{{ event.event_type }}</td>
+        <td>{{ event.level }}</td>
+        <td><pre>{{ event.payload | tojson(indent=2) }}</pre></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

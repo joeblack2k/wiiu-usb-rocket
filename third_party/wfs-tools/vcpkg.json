@@ -1,0 +1,12 @@
+{
+  "name": "wfs-tools",
+  "version-string": "1.0.0",
+  "dependencies": [
+    "boost-algorithm",
+    "boost-dynamic-bitset",
+    "boost-iostreams",
+    "boost-program-options",
+    "catch2",
+    "cryptopp"
+  ]
+}

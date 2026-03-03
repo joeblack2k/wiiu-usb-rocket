@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Queue</h2>
+<p>Worker running: <strong>{{ worker_running }}</strong></p>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Title</th>
+      <th>Region</th>
+      <th>State</th>
+      <th>Progress</th>
+      <th>Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in queue_items %}
+      <tr>
+        <td><code>{{ item.id }}</code></td>
+        <td><code>{{ item.title_id }}</code></td>
+        <td>{{ item.region }}</td>
+        <td>{{ item.state }}</td>
+        <td>{{ (item.progress * 100) | round(1) }}%</td>
+        <td>{{ item.error_code or "" }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

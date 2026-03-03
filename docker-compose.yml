@@ -1,0 +1,29 @@
+services:
+  wiiu-installer:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+    container_name: wiiu-installer
+    privileged: true
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      WIIU_DISK: ${WIIU_DISK:-}
+      ALLOW_FALLBACK: ${ALLOW_FALLBACK:-false}
+      WFS_BACKEND: ${WFS_BACKEND:-auto}
+      DRY_RUN: ${DRY_RUN:-true}
+      FIRST_WRITE_CONFIRMED: ${FIRST_WRITE_CONFIRMED:-false}
+      DB_URL: sqlite:////data/app.db
+    volumes:
+      - ./keys:/keys:ro
+      - ./data:/data
+      - ./logs:/logs
+      - /dev:/dev
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2).read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+

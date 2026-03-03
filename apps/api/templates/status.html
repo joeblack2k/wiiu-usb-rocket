@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Status</h2>
+<p>Worker running: <strong>{{ worker_running }}</strong></p>
+<p>Fallback enabled: <strong>{{ settings.allow_fallback }}</strong> | Dry-run: <strong>{{ settings.dry_run }}</strong></p>
+{% if active_disk %}
+  <div class="ok">Attached disk: <code>{{ active_disk.device_path }}</code></div>
+{% else %}
+  <div class="warn">No active attached disk.</div>
+{% endif %}
+
+<h3>Disk scan</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Size</th>
+      <th>Model</th>
+      <th>Block</th>
+      <th>WFS</th>
+      <th>Attachable</th>
+      <th>Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in disk_scan.devices %}
+      <tr>
+        <td><code>{{ d.path }}</code></td>
+        <td>{{ d.size }}</td>
+        <td>{{ d.model }}</td>
+        <td>{{ d.is_block }}</td>
+        <td>{{ d.is_wfs }}</td>
+        <td>{{ d.attachable }}</td>
+        <td>{{ d.reason or "" }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Direct Wii U USB Installer</title>
+    <style>
+      body { font-family: sans-serif; margin: 1.5rem; color: #0f172a; }
+      nav a { margin-right: 1rem; }
+      .warn { background: #fff7ed; color: #9a3412; padding: 0.75rem; border: 1px solid #fdba74; margin: 0.75rem 0; }
+      .ok { background: #ecfdf5; color: #065f46; padding: 0.75rem; border: 1px solid #6ee7b7; margin: 0.75rem 0; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #cbd5e1; padding: 0.35rem; text-align: left; font-size: 0.92rem; }
+      code { background: #f1f5f9; padding: 0.1rem 0.25rem; }
+      .small { font-size: 0.85rem; color: #475569; }
+      .controls { margin: 0.8rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Direct Wii U USB Installer</h1>
+    <nav>
+      <a href="/">Catalog</a>
+      <a href="/queue">Queue</a>
+      <a href="/status">Status</a>
+      <a href="/docs">API Docs</a>
+    </nav>
+    {% block content %}{% endblock %}
+  </body>
+</html>
+
