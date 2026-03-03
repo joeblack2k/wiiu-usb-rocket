@@ -90,10 +90,11 @@ class CatalogService:
             self._next_retry_at = now + timedelta(minutes=5)
             self._save_cache_to_disk()
             return
-        except FileNotFoundError:
-            self._last_error = upstream_error
         except VaultCatalogError as vault_exc:
-            self._last_error = f"upstream_failed: {upstream_error}; vault_failed: {vault_exc}"
+            if vault_exc.error_code == "vault_not_found":
+                self._last_error = upstream_error
+            else:
+                self._last_error = f"upstream_failed: {upstream_error}; vault_failed: [{vault_exc.error_code}] {vault_exc}"
         except Exception as vault_exc:  # pragma: no cover - defensive guard
             self._last_error = f"upstream_failed: {upstream_error}; vault_failed: {type(vault_exc).__name__}: {vault_exc}"
 
@@ -160,3 +161,40 @@ class CatalogService:
                 "source_status": source_status,
                 "last_error": self._last_error,
             }
+
+    def get_source_status(self) -> dict:
+        archive_path = self._settings.vault_archive_path
+        extract_root = self._settings.vault_extract_root
+
+        archive_present = archive_path.exists()
+        archive_size = archive_path.stat().st_size if archive_present else 0
+
+        last_extract_time: str | None = None
+        stamp_path = extract_root / "vault" / ".vault_stamp"
+        if stamp_path.exists():
+            import os
+            mtime = os.path.getmtime(stamp_path)
+            from datetime import datetime, timezone
+            last_extract_time = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+        with self._lock:
+            item_count = len(self._items)
+            status = self._source if self._items else ("no_data" if not archive_present else "pending")
+            last_error = self._last_error
+
+        return {
+            "archive_present": archive_present,
+            "archive_size": archive_size,
+            "last_extract_time": last_extract_time,
+            "item_count": item_count,
+            "status": status,
+            "last_error": last_error,
+        }
+
+    def lookup(self, title_id: str) -> "CatalogItem | None":
+        lowered = title_id.lower()
+        with self._lock:
+            for item in self._items:
+                if item.title_id == lowered:
+                    return item
+        return None

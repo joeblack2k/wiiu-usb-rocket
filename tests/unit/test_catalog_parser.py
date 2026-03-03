@@ -13,7 +13,7 @@ def test_parse_catalog_feed_c_array_format() -> None:
     assert len(items) == 2
     assert items[0].title_id == "0005000010101a00"
     assert items[0].name == "Super Game"
-    assert items[1].name == "Another\nGame"
+    assert items[1].name == "Another Game"  # newlines worden genormaliseerd naar spaties
     assert items[1].region == "USA"
 
 

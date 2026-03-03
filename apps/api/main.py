@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -15,6 +17,8 @@ from core.services.settings_service import SettingsService
 from core.services.wfs_adapter import WfsAdapterError, build_wfs_adapter
 from core.services.writer_engine import WriterEngine
 
+logger = logging.getLogger(__name__)
+
 templates = Jinja2Templates(directory="apps/api/templates")
 app = FastAPI(title="Direct Wii U USB Installer", version="1.0.0")
 
@@ -26,6 +30,11 @@ def startup() -> None:
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     settings.simulated_wfs_root.mkdir(parents=True, exist_ok=True)
+
+    if not settings.otp_path.exists():
+        logger.warning("Key file missing: %s — attach will fail without it", settings.otp_path)
+    if not settings.seeprom_path.exists():
+        logger.warning("Key file missing: %s — attach will fail without it", settings.seeprom_path)
 
     init_engine(settings)
     init_db()
@@ -80,6 +89,37 @@ def healthz(request: Request) -> dict:
     }
 
 
+@app.get("/healthz/details")
+def healthz_details(request: Request) -> dict:
+    services = get_services(request)
+    settings = services["settings"]
+    disk = services["disk"].get_active_attachment()
+
+    native_loaded = False
+    try:
+        import wfs_core_native  # type: ignore  # noqa: F401
+        native_loaded = True
+    except ImportError:
+        pass
+
+    return {
+        "ok": True,
+        "native_module_loaded": native_loaded,
+        "disk_attached": bool(disk),
+        "keys_present": {
+            "otp": settings.otp_path.exists(),
+            "seeprom": settings.seeprom_path.exists(),
+        },
+        "vault_present": settings.vault_archive_path.exists(),
+    }
+
+
+@app.get("/api/catalog/source")
+def api_catalog_source(request: Request) -> dict:
+    services = get_services(request)
+    return services["catalog"].get_source_status()
+
+
 @app.get("/api/catalog")
 def api_catalog(
     request: Request,
@@ -96,10 +136,13 @@ def api_catalog(
 @app.post("/api/queue/items")
 def api_queue_add(request: Request, payload: QueueItemCreateRequest) -> dict:
     services = get_services(request)
+    catalog_item = services["catalog"].lookup(payload.title_id)
+    catalog_title = catalog_item.name if catalog_item else None
     return services["queue"].add_item(
         title_id=payload.title_id,
         region=payload.region,
         preferred_mode=payload.preferred_mode.value,
+        catalog_title=catalog_title,
     )
 
 
@@ -201,7 +244,9 @@ def ui_queue_add(
     preferred_mode: str = Form("direct"),
 ) -> RedirectResponse:
     services = get_services(request)
-    services["queue"].add_item(title_id=title_id, region=region, preferred_mode=preferred_mode)
+    catalog_item = services["catalog"].lookup(title_id)
+    catalog_title = catalog_item.name if catalog_item else None
+    services["queue"].add_item(title_id=title_id, region=region, preferred_mode=preferred_mode, catalog_title=catalog_title)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -246,5 +291,6 @@ def ui_status(request: Request) -> HTMLResponse:
             "active_disk": services["disk"].get_active_attachment(),
             "settings": services["settings_service"].get_runtime_settings(),
             "worker_running": services["worker"].is_running(),
+            "catalog_source": services["catalog"].get_source_status(),
         },
     )

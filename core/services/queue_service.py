@@ -13,7 +13,7 @@ def utcnow() -> datetime:
 
 
 class QueueService:
-    def add_item(self, title_id: str, region: str, preferred_mode: str = "direct") -> dict:
+    def add_item(self, title_id: str, region: str, preferred_mode: str = "direct", catalog_title: str | None = None) -> dict:
         with session_scope() as session:
             queue_item = QueueItem(
                 title_id=title_id.lower(),
@@ -21,6 +21,7 @@ class QueueService:
                 preferred_mode=preferred_mode,
                 state=QueueState.QUEUED.value,
                 progress=0.0,
+                catalog_title=catalog_title,
             )
             session.add(queue_item)
             session.flush()

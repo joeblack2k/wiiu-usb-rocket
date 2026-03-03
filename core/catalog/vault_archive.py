@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tarfile
 from pathlib import Path
 
 from core.catalog.parser import CatalogItem, parse_catalog_feed
 
+_MAX_ARCHIVE_BYTES = 256 * 1024 * 1024  # 256 MB
+_MAX_FILE_BYTES = 64 * 1024 * 1024      # 64 MB
+_MAX_FILE_COUNT = 10_000
+
 
 class VaultCatalogError(RuntimeError):
-    pass
+    def __init__(self, message: str, error_code: str = "vault_error") -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 def _archive_fingerprint(archive_path: Path) -> str:
@@ -29,6 +36,13 @@ def _member_destination(base_dir: Path, member_name: str) -> Path:
 
 
 def _extract_vault_archive(archive_path: Path, extract_dir: Path) -> None:
+    archive_size = archive_path.stat().st_size
+    if archive_size > _MAX_ARCHIVE_BYTES:
+        raise VaultCatalogError(
+            f"Vault archive is too large: {archive_size} bytes (max {_MAX_ARCHIVE_BYTES})",
+            error_code="vault_too_large",
+        )
+
     fingerprint = _archive_fingerprint(archive_path)
     stamp_path = extract_dir / ".vault_stamp"
 
@@ -39,6 +53,7 @@ def _extract_vault_archive(archive_path: Path, extract_dir: Path) -> None:
         shutil.rmtree(extract_dir)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
+    file_count = 0
     with tarfile.open(archive_path, "r:gz") as archive:
         for member in archive.getmembers():
             if member.islnk() or member.issym():
@@ -50,6 +65,18 @@ def _extract_vault_archive(archive_path: Path, extract_dir: Path) -> None:
                 continue
             if not member.isfile():
                 continue
+
+            file_count += 1
+            if file_count > _MAX_FILE_COUNT:
+                raise VaultCatalogError(
+                    f"Vault archive exceeds maximum file count ({_MAX_FILE_COUNT})",
+                    error_code="vault_too_large",
+                )
+            if member.size > _MAX_FILE_BYTES:
+                raise VaultCatalogError(
+                    f"Vault archive member '{member.name}' is too large: {member.size} bytes (max {_MAX_FILE_BYTES})",
+                    error_code="vault_too_large",
+                )
 
             destination.parent.mkdir(parents=True, exist_ok=True)
             extracted = archive.extractfile(member)
@@ -68,7 +95,7 @@ def _find_json_payload(extract_dir: Path) -> Path:
         if path.is_file() and (path.name == "json" or path.suffix.lower() == ".json")
     ]
     if not candidates:
-        raise VaultCatalogError("No JSON payload found inside vault.tar.gz")
+        raise VaultCatalogError("No JSON payload found inside vault.tar.gz", error_code="vault_no_json_payload")
     return max(candidates, key=lambda path: path.stat().st_size)
 
 
@@ -87,15 +114,37 @@ def _dedupe_items(items: list[CatalogItem]) -> list[CatalogItem]:
 
 def load_vault_catalog(archive_path: Path, extract_root: Path) -> list[CatalogItem]:
     if not archive_path.exists():
-        raise FileNotFoundError(archive_path)
+        raise VaultCatalogError(f"Vault archive not found: {archive_path}", error_code="vault_not_found")
 
     extract_dir = extract_root / "vault"
     _extract_vault_archive(archive_path, extract_dir)
 
     payload_path = _find_json_payload(extract_dir)
-    payload = payload_path.read_text(encoding="utf-8")
-    items = parse_catalog_feed(payload)
+    try:
+        payload = payload_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        raise VaultCatalogError(
+            f"Failed to read vault JSON payload: {exc}", error_code="vault_json_parse_error"
+        ) from exc
+
+    stripped = payload.strip()
+    if stripped.startswith(("{", "[")):
+        try:
+            json.loads(stripped)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise VaultCatalogError(
+                f"Failed to parse vault JSON payload: {exc}", error_code="vault_json_parse_error"
+            ) from exc
+
+    try:
+        items = parse_catalog_feed(payload)
+    except Exception as exc:
+        raise VaultCatalogError(
+            f"Failed to parse vault catalog entries: {exc}", error_code="vault_json_parse_error"
+        ) from exc
     if not items:
-        raise VaultCatalogError("Vault JSON payload did not contain catalog entries")
+        raise VaultCatalogError(
+            "Vault JSON payload did not contain catalog entries", error_code="vault_no_json_payload"
+        )
 
     return _dedupe_items(items)

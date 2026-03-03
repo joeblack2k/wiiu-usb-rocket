@@ -9,6 +9,24 @@
   <div class="warn">No active attached disk.</div>
 {% endif %}
 
+<h3>Catalog / Vault</h3>
+{% if catalog_source %}
+  <table>
+    <tbody>
+      <tr><th>Vault aanwezig</th><td>{{ catalog_source.archive_present }}</td></tr>
+      {% if catalog_source.archive_present %}
+        <tr><th>Vault grootte</th><td>{{ catalog_source.archive_size | filesizeformat if catalog_source.archive_size else catalog_source.archive_size }} bytes</td></tr>
+      {% endif %}
+      <tr><th>Laatste extractie</th><td>{{ catalog_source.last_extract_time or "—" }}</td></tr>
+      <tr><th>Catalog items</th><td>{{ catalog_source.item_count }}</td></tr>
+      <tr><th>Status</th><td><strong>{{ catalog_source.status }}</strong></td></tr>
+      {% if catalog_source.last_error %}
+        <tr><th>Laatste fout</th><td class="warn">{{ catalog_source.last_error }}</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+{% endif %}
+
 <h3>Disk scan</h3>
 <table>
   <thead>
