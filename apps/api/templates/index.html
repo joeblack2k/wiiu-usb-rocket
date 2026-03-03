@@ -14,10 +14,19 @@
 
 <form method="get" action="/">
   <label>Search <input type="text" name="search" value="{{ search }}" /></label>
-  <label>Region <input type="text" name="region" value="{{ region }}" /></label>
   <label>Category <input type="text" name="category" value="{{ category }}" /></label>
+  <input type="hidden" name="region" value="{{ region }}" />
   <button type="submit">Filter</button>
 </form>
+
+<div style="display:flex;gap:0.4rem;margin:0.5rem 0;">
+  {% for r in ["ALL", "EUR", "USA", "JPN"] %}
+    <a href="/?search={{ search }}&region={{ r }}&category={{ category }}"
+       style="padding:0.3rem 0.8rem;border:1px solid #64748b;text-decoration:none;
+              background:{{ '#334155' if region == r or (r == 'ALL' and not region) else 'transparent' }};
+              color:{{ '#fff' if region == r or (r == 'ALL' and not region) else '#cbd5e1' }};">{{ r }}</a>
+  {% endfor %}
+</div>
 
 <h2>Catalog</h2>
 <div class="controls" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
@@ -32,6 +41,57 @@
     </button>
   </form>
 </div>
+
+{% if settings.enable_downloads %}
+<form method="post" action="/queue/add-bulk">
+  <div style="display:flex;align-items:center;gap:0.8rem;margin-bottom:0.5rem;">
+    <select name="preferred_mode">
+      <option value="direct">direct</option>
+      <option value="fallback">fallback</option>
+    </select>
+    <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:0.4rem 1.2rem;cursor:pointer;">
+      &#11015; Download en Install ALL (<span id="sel-count">0</span> geselecteerd)
+    </button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="sel-all" title="Selecteer alles" /></th>
+        <th>Title ID</th>
+        <th>Name</th>
+        <th>Region</th>
+        <th>Category</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in catalog["items"] %}
+        <tr>
+          <td><input type="checkbox" class="sel-item" name="sel" value="{{ item.title_id }}:{{ item.region }}" /></td>
+          <td><code>{{ item.title_id }}</code></td>
+          <td>{{ item.name }}</td>
+          <td>{{ item.region }}</td>
+          <td>{{ item.category }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
+<script>
+  (function() {
+    var selAll = document.getElementById('sel-all');
+    var items = document.querySelectorAll('.sel-item');
+    var count = document.getElementById('sel-count');
+    function updateCount() {
+      count.textContent = document.querySelectorAll('.sel-item:checked').length;
+    }
+    selAll.addEventListener('change', function() {
+      items.forEach(function(cb) { cb.checked = selAll.checked; });
+      updateCount();
+    });
+    items.forEach(function(cb) { cb.addEventListener('change', updateCount); });
+  })();
+</script>
+{% else %}
 <table>
   <thead>
     <tr>
@@ -39,7 +99,6 @@
       <th>Name</th>
       <th>Region</th>
       <th>Category</th>
-      <th>Queue</th>
     </tr>
   </thead>
   <tbody>
@@ -49,25 +108,11 @@
         <td>{{ item.name }}</td>
         <td>{{ item.region }}</td>
         <td>{{ item.category }}</td>
-        <td>
-          {% if settings.enable_downloads %}
-            <form method="post" action="/queue/add">
-              <input type="hidden" name="title_id" value="{{ item.title_id }}" />
-              <input type="hidden" name="region" value="{{ item.region }}" />
-              <select name="preferred_mode">
-                <option value="direct">direct</option>
-                <option value="fallback">fallback</option>
-              </select>
-              <button type="submit">Add</button>
-            </form>
-          {% else %}
-            <span class="small" style="color:#94a3b8;">disabled</span>
-          {% endif %}
-        </td>
       </tr>
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
 
 <h2>Queue</h2>
 <div class="controls">

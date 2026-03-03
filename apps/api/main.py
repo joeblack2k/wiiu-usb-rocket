@@ -273,6 +273,31 @@ def ui_queue_add(
     return RedirectResponse(url="/", status_code=303)
 
 
+@app.post("/queue/add-bulk")
+def ui_queue_add_bulk(
+    request: Request,
+    sel: list[str] = Form(default=[]),
+    preferred_mode: str = Form("direct"),
+) -> RedirectResponse:
+    services = get_services(request)
+    for entry in sel:
+        parts = entry.split(":", 1)
+        if len(parts) != 2:
+            continue
+        title_id, region = parts
+        catalog_item = services["catalog"].lookup(title_id)
+        catalog_title = catalog_item.name if catalog_item else None
+        services["queue"].add_item(
+            title_id=title_id,
+            region=region,
+            preferred_mode=preferred_mode,
+            catalog_title=catalog_title,
+        )
+    if sel:
+        services["worker"].start()
+    return RedirectResponse(url="/queue", status_code=303)
+
+
 @app.get("/queue", response_class=HTMLResponse)
 def ui_queue(request: Request) -> HTMLResponse:
     services = get_services(request)
