@@ -47,9 +47,49 @@ class DiskService:
             return True
         return b"\x01\x01\x08\x00" in head
 
+    def _device_payload(
+        self,
+        *,
+        path: str,
+        size: str,
+        model: str,
+        is_block: bool,
+        keys_ok: bool,
+        active_path: str | None,
+        active_wfs_verified: bool,
+    ) -> dict:
+        is_wfs = self._probe_wfs_signature(path) if is_block else False
+        if active_path == path and active_wfs_verified:
+            # Keep scan output consistent with a previously verified attachment.
+            is_wfs = True
+
+        attachable = is_block and keys_ok and is_wfs
+        reason = None
+        if not is_block:
+            reason = "not_block_device"
+        elif not keys_ok:
+            reason = "keys_invalid"
+        elif not is_wfs:
+            reason = "wfs_header_not_detected"
+
+        return {
+            "path": path,
+            "size": size,
+            "model": model,
+            "is_block": is_block,
+            "is_wfs": is_wfs,
+            "attachable": attachable,
+            "reason": reason,
+        }
+
     def scan_devices(self) -> dict:
         devices = []
         keys_ok, keys_error = self._keys_ok()
+
+        active = self.get_active_attachment()
+        active_path = active.get("device_path") if active else None
+        active_wfs_verified = bool(active and active.get("wfs_verified"))
+
         try:
             raw = subprocess.check_output(
                 ["lsblk", "--json", "-o", "NAME,KNAME,PATH,SIZE,TYPE,MODEL,FSTYPE"], text=True
@@ -61,41 +101,31 @@ class DiskService:
                     continue
                 path = node.get("path") or f"/dev/{node.get('name')}"
                 is_block = self._is_block_device(path)
-                is_wfs = self._probe_wfs_signature(path) if is_block else False
-                reason = None
-                attachable = is_block and keys_ok and is_wfs
-                if not is_block:
-                    reason = "not_block_device"
-                elif not keys_ok:
-                    reason = "keys_invalid"
-                elif not is_wfs:
-                    reason = "wfs_header_not_detected"
                 devices.append(
-                    {
-                        "path": path,
-                        "size": node.get("size", ""),
-                        "model": node.get("model", ""),
-                        "is_block": is_block,
-                        "is_wfs": is_wfs,
-                        "attachable": attachable,
-                        "reason": reason,
-                    }
+                    self._device_payload(
+                        path=path,
+                        size=node.get("size", ""),
+                        model=node.get("model", ""),
+                        is_block=is_block,
+                        keys_ok=keys_ok,
+                        active_path=active_path,
+                        active_wfs_verified=active_wfs_verified,
+                    )
                 )
         except Exception:
             for candidate in sorted(Path("/dev").glob("sd?")):
                 path = str(candidate)
                 is_block = self._is_block_device(path)
-                is_wfs = self._probe_wfs_signature(path) if is_block else False
                 devices.append(
-                    {
-                        "path": path,
-                        "size": "unknown",
-                        "model": "",
-                        "is_block": is_block,
-                        "is_wfs": is_wfs,
-                        "attachable": bool(is_block and keys_ok and is_wfs),
-                        "reason": None,
-                    }
+                    self._device_payload(
+                        path=path,
+                        size="unknown",
+                        model="",
+                        is_block=is_block,
+                        keys_ok=keys_ok,
+                        active_path=active_path,
+                        active_wfs_verified=active_wfs_verified,
+                    )
                 )
 
         response = {"devices": devices}
@@ -172,4 +202,3 @@ class DiskService:
     @staticmethod
     def device_fingerprint(device_path: str) -> str:
         return hashlib.sha256(device_path.encode("utf-8")).hexdigest()[:24]
-

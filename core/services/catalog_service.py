@@ -107,7 +107,12 @@ class CatalogService:
 
     def _refresh_locked(self) -> None:
         timeout = httpx.Timeout(30.0)
-        response = httpx.get(self._settings.catalog_url, timeout=timeout)
+        response = httpx.get(
+            self._settings.catalog_url,
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "wiiu-usb-rocket/0.1", "Connection": "close"},
+        )
         response.raise_for_status()
         items = parse_catalog_feed(response.text)
         self._items = items
