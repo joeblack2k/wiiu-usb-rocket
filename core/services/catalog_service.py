@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from core.catalog.parser import CatalogItem, parse_catalog_feed
+from core.catalog.vault_archive import VaultCatalogError, load_vault_catalog
 from core.config import Settings
 
 
@@ -21,6 +22,7 @@ class CatalogService:
         self._last_refresh: datetime | None = None
         self._last_error: str | None = None
         self._next_retry_at: datetime | None = None
+        self._source: str = "cache"
         self._load_cache_from_disk()
 
     def _load_cache_from_disk(self) -> None:
@@ -44,6 +46,7 @@ class CatalogService:
             self._items = loaded
             if isinstance(refreshed_at, str):
                 self._last_refresh = datetime.fromisoformat(refreshed_at)
+            self._source = str(payload.get("source", "cache"))
         except Exception:
             self._items = []
             self._last_refresh = None
@@ -53,6 +56,7 @@ class CatalogService:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "refreshed_at": (self._last_refresh or utcnow()).isoformat(),
+            "source": self._source,
             "items": [asdict(item) for item in self._items],
         }
         cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -73,10 +77,28 @@ class CatalogService:
     def _try_refresh_locked(self, now: datetime) -> None:
         try:
             self._refresh_locked()
-        except Exception as exc:
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            # avoid hammering an unstable upstream endpoint
+            return
+        except Exception as upstream_exc:
+            upstream_error = f"{type(upstream_exc).__name__}: {upstream_exc}"
+
+        try:
+            vault_items = load_vault_catalog(self._settings.vault_archive_path, self._settings.vault_extract_root)
+            self._items = vault_items
+            self._last_refresh = now
+            self._source = "vault"
+            self._last_error = f"upstream_failed: {upstream_error}"
             self._next_retry_at = now + timedelta(minutes=5)
+            self._save_cache_to_disk()
+            return
+        except FileNotFoundError:
+            self._last_error = upstream_error
+        except VaultCatalogError as vault_exc:
+            self._last_error = f"upstream_failed: {upstream_error}; vault_failed: {vault_exc}"
+        except Exception as vault_exc:  # pragma: no cover - defensive guard
+            self._last_error = f"upstream_failed: {upstream_error}; vault_failed: {type(vault_exc).__name__}: {vault_exc}"
+
+        # avoid hammering unstable endpoints and broken local archives
+        self._next_retry_at = now + timedelta(minutes=5)
 
     def force_refresh(self) -> None:
         with self._lock:
@@ -91,6 +113,7 @@ class CatalogService:
         self._last_refresh = utcnow()
         self._last_error = None
         self._next_retry_at = None
+        self._source = "remote"
         self._save_cache_to_disk()
 
     def query(
@@ -124,11 +147,15 @@ class CatalogService:
 
             source_status = "ok"
             if self._last_error is not None:
-                source_status = "stale" if self._items else "degraded"
+                if self._source == "vault" and self._items:
+                    source_status = "fallback"
+                else:
+                    source_status = "stale" if self._items else "degraded"
 
             return {
                 "items": [item.to_dict() for item in selected],
                 "total": total,
+                "source": self._source,
                 "source_age_sec": source_age_sec,
                 "source_status": source_status,
                 "last_error": self._last_error,

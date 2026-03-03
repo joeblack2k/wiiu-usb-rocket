@@ -17,6 +17,7 @@ Dockerized FastAPI + worker application that manages a web queue, fetches catalo
 1. Put keys in `./keys`:
    - `keys/otp.bin` (0x400 bytes)
    - `keys/seeprom.bin` (0x200 bytes)
+   - optional `keys/vault.tar.gz` (user-supplied vault archive used to generate local catalog fallback)
 2. Start with Docker Compose:
 
 ```bash

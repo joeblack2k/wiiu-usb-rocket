@@ -34,14 +34,22 @@ def parse_catalog_feed(payload: str) -> list[CatalogItem]:
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            if "title_id" not in entry:
+
+            title_id = entry.get("title_id") or entry.get("titleID") or entry.get("titleid")
+            if title_id is None:
                 continue
+
+            category = entry.get("category")
+            if category is None:
+                ticket_flag = str(entry.get("ticket", "")).strip().lower()
+                category = "ticket" if ticket_flag in {"1", "true", "yes"} else "unknown"
+
             items.append(
                 CatalogItem(
-                    title_id=str(entry.get("title_id", "")).lower(),
+                    title_id=str(title_id).lower(),
                     name=str(entry.get("name", "")),
                     region=str(entry.get("region", "ALL")),
-                    category=str(entry.get("category", "unknown")),
+                    category=str(category),
                 )
             )
         return items

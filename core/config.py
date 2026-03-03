@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     keys_dir: Path = Path("/keys")
     otp_path: Path = Path("/keys/otp.bin")
     seeprom_path: Path = Path("/keys/seeprom.bin")
+    vault_archive_path: Path = Path("/keys/vault.tar.gz")
 
     wiiu_disk: str | None = Field(default=None, alias="WIIU_DISK")
     allow_fallback: bool = Field(default=False, alias="ALLOW_FALLBACK")
@@ -47,6 +48,10 @@ class Settings(BaseSettings):
     @property
     def simulated_wfs_root(self) -> Path:
         return self.data_dir / "simulated_wfs"
+
+    @property
+    def vault_extract_root(self) -> Path:
+        return self.data_dir / "vault_cache"
 
 
 @lru_cache(maxsize=1)

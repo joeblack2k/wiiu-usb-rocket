@@ -23,3 +23,13 @@ def test_parse_catalog_feed_json_format() -> None:
     assert len(items) == 1
     assert items[0].title_id == "00050000aaaabbbb"
     assert items[0].category == "game"
+
+
+def test_parse_catalog_feed_vault_json_format() -> None:
+    payload = '[{"titleID":"000500001010da00","name":"Minecraft: Wii U Edition","region":"EUR","ticket":"1"}]'
+    items = parse_catalog_feed(payload)
+    assert len(items) == 1
+    assert items[0].title_id == "000500001010da00"
+    assert items[0].name == "Minecraft: Wii U Edition"
+    assert items[0].region == "EUR"
+    assert items[0].category == "ticket"
