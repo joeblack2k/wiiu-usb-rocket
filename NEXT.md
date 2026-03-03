@@ -17,13 +17,31 @@
 
 **Bestand:** `core/config.py`
 
-Voeg toe aan `Settings`:
+Wijzig `nus_base_url` in `Settings`:
 
 ```python
-nus_base_url: str = "http://nus.cdn.wup.shop.nintendo.net/ccs/download"
+nus_base_url: str = Field(
+    default="http://nus.cdn.wup.shop.nintendo.net/ccs/download",
+    alias="LINK",
+)
 ```
 
-`nus_base_url` bestaat al maar staat leeg. Zet de default op bovenstaande waarde.
+Prioriteit: als `LINK` gezet is in ENV, wordt die waarde gebruikt. Zonder `LINK` geldt de Nintendo CDN-URL als fallback.
+
+Gedrag:
+
+```
+LINK niet gezet  →  http://nus.cdn.wup.shop.nintendo.net/ccs/download
+LINK=http://nus.cdn.wup.shop.eigendomein.net/ccs/download  →  die URL
+```
+
+`NusClient` (Fase 2) krijgt `settings.nus_base_url` mee — geen verdere aanpassing nodig in de client zelf. De URL-structuur `{base_url}/{title_id}/{resource}` blijft identiek ongeacht welke base URL actief is.
+
+Validatie in `startup()` in `apps/api/main.py`:
+
+```python
+logger.info("NUS base URL: %s", settings.nus_base_url)
+```
 
 ---
 
