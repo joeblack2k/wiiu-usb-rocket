@@ -144,10 +144,18 @@
         <td>{{ q.state }}</td>
         <td>{{ (q.progress * 100) | round(1) }}%</td>
         <td>{{ q.error_code or "" }}</td>
-        <td>
+        <td style="display:flex;gap:0.4rem;flex-wrap:wrap;">
           <form method="post" action="/api/install/{{ q.id }}/execute">
             <button type="submit">Execute now</button>
           </form>
+          {% if q.state == "DONE" %}
+            <form method="post" action="/titles/{{ q.title_id }}/deinstall"
+                  onsubmit="return confirm('Verwijder {{ q.title_id }} van WFS?')">
+              <button type="submit" style="background:#dc2626;color:#fff;border:none;padding:0.3rem 0.6rem;cursor:pointer;">
+                Deinstall
+              </button>
+            </form>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}

@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 import threading
 import time
@@ -87,7 +88,16 @@ class QueueWorker:
             self._queue_service.update_job(job_id, phase="downloading", progress=0.1)
             self._queue_service.add_job_event(job_id, "phase", {"phase": "downloading"})
 
+            t_download_start = time.monotonic()
             download_result = self._download_service.download_title(title_id=title_id, region=region)
+            elapsed_download = time.monotonic() - t_download_start
+            total_dl_bytes = sum(a.size for a in download_result.artifacts)
+            speed_bps = int(total_dl_bytes / elapsed_download) if elapsed_download > 0 else 0
+            self._queue_service.add_job_event(
+                job_id,
+                "download_stats",
+                {"bytes": total_dl_bytes, "elapsed_sec": round(elapsed_download, 2), "speed_bps": speed_bps},
+            )
 
             self._queue_service.set_state(queue_item_id, QueueState.DOWNLOADED, progress=0.35)
             self._queue_service.update_job(job_id, phase="downloaded", progress=0.35)
@@ -114,6 +124,22 @@ class QueueWorker:
                     written = decrypt_app(
                         artifact.local_path, dec_path, ticket_info.title_key, content_record.index
                     )
+                    # Truncate AES padding to actual content size from TMD
+                    if content_record.size < written:
+                        with dec_path.open("r+b") as fh:
+                            fh.truncate(content_record.size)
+                        written = content_record.size
+                    # SHA1 integrity check against TMD record hash
+                    if len(content_record.sha1_hash) == 20:
+                        digest = hashlib.sha1()
+                        with dec_path.open("rb") as fh:
+                            for chunk in iter(lambda: fh.read(65536), b""):
+                                digest.update(chunk)
+                        if digest.digest() != content_record.sha1_hash:
+                            raise RuntimeError(
+                                f"SHA1 mismatch for content {content_record.content_id_hex}: "
+                                f"expected {content_record.sha1_hash.hex()}, got {digest.hexdigest()}"
+                            )
                     decrypted_artifacts.append(dataclasses.replace(artifact, local_path=dec_path, size=written))
                 download_result = dataclasses.replace(download_result, artifacts=decrypted_artifacts)
                 self._queue_service.add_job_event(

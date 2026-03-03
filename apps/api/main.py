@@ -77,6 +77,7 @@ def get_services(request: Request):
         "catalog": request.app.state.catalog_service,
         "disk": request.app.state.disk_service,
         "worker": request.app.state.worker,
+        "writer_engine": request.app.state.writer_engine,
     }
 
 
@@ -206,6 +207,25 @@ def api_install_execute(request: Request, queue_item_id: str) -> dict:
         "job_id": result.get("job_id"),
         "state": result.get("state", "UNKNOWN"),
     }
+
+
+@app.post("/api/titles/{title_id}/deinstall")
+def api_deinstall_title(request: Request, title_id: str) -> dict:
+    services = get_services(request)
+    try:
+        return services["writer_engine"].deinstall_title(title_id)
+    except WfsAdapterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/titles/{title_id}/deinstall")
+def ui_deinstall_title(request: Request, title_id: str) -> RedirectResponse:
+    services = get_services(request)
+    try:
+        services["writer_engine"].deinstall_title(title_id)
+    except WfsAdapterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/queue", status_code=303)
 
 
 @app.post("/api/settings/fallback")

@@ -30,7 +30,8 @@ class ContentRecord:
     content_id: int         # uint32
     content_id_hex: str     # 8-char hex string, geen prefix (voor URL-gebruik)
     index: bytes            # raw 2 bytes — AES-IV prefix bij .app-decryptie
-    size: int               # uint64, bestandsgrootte in bytes
+    size: int               # uint64, bestandsgrootte in bytes (na decryptie, vóór padding)
+    sha1_hash: bytes = b""  # 20 bytes SHA1 van gedecrypteerde content (uit TMD record +0x10)
 
 
 @dataclass(slots=True)
@@ -80,6 +81,7 @@ def _parse(data: bytes) -> TmdInfo:
         (content_id,) = struct.unpack_from(">I", data, base + 0x00)
         index: bytes = data[base + 0x04 : base + 0x06]
         (size,) = struct.unpack_from(">Q", data, base + 0x08)
+        sha1_hash: bytes = data[base + 0x10 : base + 0x24]
 
         contents.append(
             ContentRecord(
@@ -87,6 +89,7 @@ def _parse(data: bytes) -> TmdInfo:
                 content_id_hex=f"{content_id:08x}",
                 index=index,
                 size=size,
+                sha1_hash=sha1_hash,
             )
         )
 

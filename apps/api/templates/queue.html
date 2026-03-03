@@ -11,6 +11,7 @@
       <th>State</th>
       <th>Progress</th>
       <th>Error</th>
+      <th>Action</th>
     </tr>
   </thead>
   <tbody>
@@ -22,6 +23,16 @@
         <td>{{ item.state }}</td>
         <td>{{ (item.progress * 100) | round(1) }}%</td>
         <td>{{ item.error_code or "" }}</td>
+        <td>
+          {% if item.state == "DONE" %}
+            <form method="post" action="/titles/{{ item.title_id }}/deinstall"
+                  onsubmit="return confirm('Verwijder {{ item.title_id }} van WFS?')">
+              <button type="submit" style="background:#dc2626;color:#fff;border:none;padding:0.2rem 0.6rem;cursor:pointer;">
+                Deinstall
+              </button>
+            </form>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
   </tbody>

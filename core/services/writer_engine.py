@@ -115,6 +115,21 @@ class WriterEngine:
         self._queue_service.add_job_event(job_id, "write_report", report)
         return report
 
+    def deinstall_title(self, title_id: str) -> dict:
+        dry_run = self._settings_service.get_bool("dry_run", default=True)
+        first_write_confirmed = self._settings_service.get_bool("first_write_confirmed", default=False)
+
+        if not dry_run and not first_write_confirmed:
+            raise WfsAdapterError("First-write confirmation is required before mutating WFS")
+
+        wfs_path = f"/usr/title/{title_id.lower()}"
+        if dry_run:
+            return {"dry_run": True, "path": wfs_path, "deleted": False}
+
+        self._wfs_adapter.delete(wfs_path)
+        self._wfs_adapter.flush()
+        return {"dry_run": False, "path": wfs_path, "deleted": True}
+
     def staged_diagnostics(self, job_id: str) -> dict:
         events = self._queue_service.get_job_events(job_id)
         return {"events": events, "event_count": len(events)}
