@@ -35,7 +35,7 @@ class TicketInfo:
     title_key: bytes        # 16 bytes, na decryptie
 
 
-def _load_common_key() -> bytes:
+def load_common_key() -> bytes:
     raw = os.environ.get("WIIU_COMMON_KEY", "").strip()
     if not raw:
         raise TicketError("WIIU_COMMON_KEY is niet gezet in de omgeving")
@@ -48,6 +48,9 @@ def _load_common_key() -> bytes:
             f"WIIU_COMMON_KEY moet precies 16 bytes zijn (32 hex-tekens), got {len(key)}"
         )
     return key
+
+
+_load_common_key = load_common_key  # backward-compat alias
 
 
 def parse_ticket(tik_path: Path) -> TicketInfo:

@@ -130,7 +130,8 @@ class QueueWorker:
                             fh.truncate(content_record.size)
                         written = content_record.size
                     # SHA1 integrity check against TMD record hash
-                    if len(content_record.sha1_hash) == 20:
+                    # Overgeslagen bij nep-ticket: content op custom mirror kan andere hash hebben
+                    if len(content_record.sha1_hash) == 20 and not download_result.fake_ticket:
                         digest = hashlib.sha1()
                         with dec_path.open("rb") as fh:
                             for chunk in iter(lambda: fh.read(65536), b""):
@@ -167,6 +168,7 @@ class QueueWorker:
                     "artifacts": len(download_result.artifacts),
                     "ticket_present": download_result.ticket_present,
                     "tmd_present": download_result.tmd_present,
+                    "fake_ticket": download_result.fake_ticket,
                 },
             }
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -7,7 +8,10 @@ from typing import Any
 import httpx
 
 from core.config import Settings
+from core.nus.fake_ticket import generate_fake_cetk
 from core.nus.tmd import TmdError, TmdInfo, parse_tmd_bytes
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -30,6 +34,7 @@ class DownloadResult:
     ticket_present: bool
     tmd_info: TmdInfo | None = None
     cetk_bytes: bytes | None = None
+    fake_ticket: bool = False
 
 
 class DownloadService:
@@ -126,6 +131,7 @@ class DownloadService:
         ticket_present = False
         tmd_info: TmdInfo | None = None
         cetk_bytes: bytes | None = None
+        fake_ticket = False
 
         if self._settings.nus_base_url:
             base = self._settings.nus_base_url.rstrip("/")
@@ -169,6 +175,29 @@ class DownloadService:
                             sha256=self._hash_file(cetk_path),
                         )
                     )
+                elif self._settings.is_custom_mirror:
+                    try:
+                        cetk_bytes = generate_fake_cetk(title_id)
+                        cetk_path.write_bytes(cetk_bytes)
+                        ticket_present = True
+                        fake_ticket = True
+                        logger.warning(
+                            "Geen cetk gevonden op mirror voor %s — nep-ticket gegenereerd (nul-sleutel). "
+                            "Content moet versleuteld zijn met een nul-titlekey.",
+                            title_id,
+                        )
+                        artifacts.append(
+                            DownloadedArtifact(
+                                kind="ticket",
+                                local_path=cetk_path,
+                                relative_path="cetk",
+                                target_path=f"/usr/title/{title_id}/meta/cetk",
+                                size=cetk_path.stat().st_size,
+                                sha256=self._hash_file(cetk_path),
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning("Nep-ticket generatie mislukt voor %s: %s", title_id, exc)
 
                 if tmd_info is not None:
                     for record in tmd_info.contents:
@@ -219,5 +248,6 @@ class DownloadService:
             ticket_present=ticket_present,
             tmd_info=tmd_info,
             cetk_bytes=cetk_bytes,
+            fake_ticket=fake_ticket,
         )
 
