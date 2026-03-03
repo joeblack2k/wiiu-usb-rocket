@@ -22,12 +22,19 @@ Dit document beschrijft:
   - grootste `json` payload wordt geparsed naar catalog-items
   - `GET /api/catalog` geeft `source` en `source_status` terug
 
-## 2) Scope van deze TODO
+## 2) Scope + overdracht voor volgende engineer
 
-Dit document bevat alleen:
+Dit document bevat:
 - concrete engineering-taken voor deze codebase,
 - operationele verbeteringen,
 - test- en observability-werk.
+
+Daarnaast: er is een bewust niet-afgebouwd deel (extern overnamepunt) rond key/decrypt/download-logica.
+Als een volgende engineer dat oppakt, doe dat als **afzonderlijke module** met:
+1. eigen design-doc,
+2. duidelijke input/output contracten,
+3. volledige testdekking op parser/decrypt/download-stappen,
+4. gescheiden code ownership en audit logging.
 
 ## 3) Technische TODO’s die direct kunnen
 
