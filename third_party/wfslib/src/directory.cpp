@@ -198,8 +198,10 @@ std::expected<std::shared_ptr<File>, WfsError> Directory::CreateFile(std::string
     return std::unexpected(kAlreadyExists);
   }
 
+  uint32_t file_flags = encrypted ? 0u : static_cast<uint32_t>(EntryMetadata::Flags::UNENCRYPTED_FILE);
+
   auto metadata = make_entry_metadata(name,
-                                      encrypted ? 0 : EntryMetadata::Flags::UNENCRYPTED_FILE,
+                                      file_flags,
                                       size_on_disk,
                                       /*file_size=*/0,
                                       /*directory_block_number=*/0,
