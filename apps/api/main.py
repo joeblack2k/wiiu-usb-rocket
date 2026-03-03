@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -113,6 +114,10 @@ def startup() -> None:
     if not settings.seeprom_path.exists():
         logger.warning("Key file missing: %s — attach will fail without it", settings.seeprom_path)
 
+    common_key_present = bool(os.environ.get("WIIU_COMMON_KEY", "").strip())
+    if not common_key_present:
+        logger.warning("WIIU_COMMON_KEY is not set; decryption stage will fail for encrypted titles")
+
     logger.info("startup: nus_base_url=%s log_level=%s", settings.nus_base_url, settings.log_level)
 
     init_engine(settings)
@@ -192,6 +197,7 @@ def healthz_details(request: Request) -> dict:
             "seeprom": settings.seeprom_path.exists(),
         },
         "vault_present": settings.vault_archive_path.exists(),
+        "common_key_present": bool(os.environ.get("WIIU_COMMON_KEY", "").strip()),
     }
 
 
@@ -437,6 +443,7 @@ def ui_index(
             "total_pages": total_pages,
             "page_size": page_size,
             "alphabet": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ["#"],
+            "common_key_present": bool(os.environ.get("WIIU_COMMON_KEY", "").strip()),
         },
     )
 

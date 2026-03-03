@@ -7,7 +7,7 @@ import time
 
 from core.models.enums import JobState, QueueState
 from core.nus.app_decryptor import decrypt_app
-from core.nus.ticket import parse_ticket_bytes
+from core.nus.ticket import TicketError, parse_ticket_bytes
 from core.services.download_service import DownloadService
 from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
@@ -136,7 +136,30 @@ class QueueWorker:
             self._queue_service.update_job(job_id, phase="decrypting", progress=0.5)
 
             if download_result.cetk_bytes and download_result.tmd_info is not None:
-                ticket_info = parse_ticket_bytes(download_result.cetk_bytes)
+                try:
+                    ticket_info = parse_ticket_bytes(download_result.cetk_bytes)
+                except TicketError as exc:
+                    error_text = str(exc)
+                    error_code = "MISSING_COMMON_KEY" if "WIIU_COMMON_KEY" in error_text else "TICKET_DECRYPT_FAILED"
+                    self._queue_service.set_state(
+                        queue_item_id,
+                        QueueState.FAILED,
+                        progress=1.0,
+                        error_code=error_code,
+                        error_detail=error_text,
+                    )
+                    self._queue_service.update_job(
+                        job_id,
+                        phase="failed",
+                        progress=1.0,
+                        state=JobState.FAILED,
+                        message=error_text,
+                        diagnostics={"error": error_text, "error_code": error_code},
+                    )
+                    self._queue_service.add_job_event(job_id, "error", {"message": error_text}, level="ERROR")
+                    logger.warning("job.failed job_id=%s title_id=%s error_code=%s", job_id, title_id, error_code)
+                    return {"job_id": job_id, "state": QueueState.FAILED.value, "error": error_text}
+
                 decrypted_artifacts = []
                 for artifact in download_result.artifacts:
                     if artifact.kind != "content":
