@@ -178,15 +178,34 @@ class QueueWorker:
                         with dec_path.open("r+b") as fh:
                             fh.truncate(content_record.size)
                         written = content_record.size
-                    if len(content_record.sha1_hash) == 20 and not download_result.fake_ticket:
-                        digest = hashlib.sha1()
+                    if content_record.content_hash and not download_result.fake_ticket:
+                        if content_record.hash_algo == "sha256":
+                            digest = hashlib.sha256()
+                        else:
+                            digest = hashlib.sha1()
                         with dec_path.open("rb") as fh:
                             for chunk in iter(lambda: fh.read(65536), b""):
                                 digest.update(chunk)
-                        if digest.digest() != content_record.sha1_hash:
-                            raise RuntimeError(
-                                f"SHA1 mismatch for content {content_record.content_id_hex}: "
-                                f"expected {content_record.sha1_hash.hex()}, got {digest.hexdigest()}"
+                        actual_hash = digest.hexdigest()
+                        expected_hash = content_record.content_hash.hex()
+                        if actual_hash != expected_hash:
+                            self._queue_service.add_job_event(
+                                job_id,
+                                "hash_mismatch",
+                                {
+                                    "content_id": content_record.content_id_hex,
+                                    "hash_algo": content_record.hash_algo,
+                                    "expected": expected_hash,
+                                    "actual": actual_hash,
+                                },
+                                level="WARNING",
+                            )
+                            logger.warning(
+                                "decrypt.hash_mismatch job_id=%s title_id=%s content=%s algo=%s",
+                                job_id,
+                                title_id,
+                                content_record.content_id_hex,
+                                content_record.hash_algo,
                             )
                     decrypted_artifacts.append(dataclasses.replace(artifact, local_path=dec_path, size=written))
                 download_result = dataclasses.replace(download_result, artifacts=decrypted_artifacts)

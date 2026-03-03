@@ -31,7 +31,8 @@ class ContentRecord:
     content_id_hex: str
     index: bytes
     size: int
-    sha1_hash: bytes = b""
+    content_hash: bytes = b""
+    hash_algo: str = "sha1"
 
 
 @dataclass(slots=True)
@@ -99,7 +100,12 @@ def _parse_records(data: bytes, content_count: int, record_size: int) -> list[Co
         (content_id,) = struct.unpack_from(">I", data, base + 0x00)
         index = data[base + 0x04 : base + 0x06]
         (size,) = struct.unpack_from(">Q", data, base + 0x08)
-        sha1_hash = data[base + 0x10 : base + 0x24]
+        if record_size >= 0x30:
+            content_hash = data[base + 0x10 : base + 0x30]
+            hash_algo = "sha256"
+        else:
+            content_hash = data[base + 0x10 : base + 0x24]
+            hash_algo = "sha1"
 
         contents.append(
             ContentRecord(
@@ -107,7 +113,8 @@ def _parse_records(data: bytes, content_count: int, record_size: int) -> list[Co
                 content_id_hex=f"{content_id:08x}",
                 index=index,
                 size=size,
-                sha1_hash=sha1_hash,
+                content_hash=content_hash,
+                hash_algo=hash_algo,
             )
         )
     return contents

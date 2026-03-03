@@ -111,3 +111,13 @@ def test_parse_tmd_supports_legacy_0x24_records() -> None:
     assert info.content_count == 2
     assert info.contents[0].content_id_hex == "000000aa"
     assert info.contents[1].content_id_hex == "000000bb"
+
+
+def test_parse_tmd_hash_algo_depends_on_record_size() -> None:
+    modern = parse_tmd_bytes(_make_tmd([(0x00000001, b"\x00\x00", 1)], record_size=0x30))
+    assert modern.contents[0].hash_algo == "sha256"
+    assert len(modern.contents[0].content_hash) == 32
+
+    legacy = parse_tmd_bytes(_make_tmd([(0x00000001, b"\x00\x00", 1)], record_size=0x24))
+    assert legacy.contents[0].hash_algo == "sha1"
+    assert len(legacy.contents[0].content_hash) == 20
