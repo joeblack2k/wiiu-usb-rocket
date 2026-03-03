@@ -75,3 +75,16 @@ def test_attach_rejects_non_block_dev_before_key_check(tmp_path: Path) -> None:
         service.attach_device("/dev/null")
 
     assert adapter.attach_called is False
+
+
+def test_attach_checks_keys_after_basic_device_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(tmp_path)
+    adapter = GuardAdapter()
+    service = DiskService(settings, adapter)
+
+    monkeypatch.setattr(service, "_is_block_device", lambda _path: True)
+
+    with pytest.raises(WfsAdapterError, match="Cannot attach disk"):
+        service.attach_device("/dev/sdb")
+
+    assert adapter.attach_called is False

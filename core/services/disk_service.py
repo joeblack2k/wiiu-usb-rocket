@@ -109,8 +109,6 @@ class DiskService:
                 raise WfsAdapterError("Only /dev/* block devices are accepted")
             if not self._is_block_device(device_path):
                 raise WfsAdapterError("Target path is not a block device")
-            if not self._probe_wfs_signature(device_path):
-                raise WfsAdapterError("Target does not appear to be a WFS device")
 
         keys_ok, keys_error = self._keys_ok()
         if not keys_ok:

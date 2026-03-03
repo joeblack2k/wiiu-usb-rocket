@@ -175,8 +175,14 @@ class NativeWfsAdapter(BaseWfsAdapter):
         self._module = wfs_core_native
         self._engine = wfs_core_native.WfsCore()
 
+    def _call_native(self, operation: str, fn, *args):
+        try:
+            return fn(*args)
+        except Exception as exc:
+            raise WfsAdapterError(f"Native {operation} failed: {exc}") from exc
+
     def attach(self, device_path: str, otp_path: Path, seeprom_path: Path) -> AttachResult:
-        payload = self._engine.attach(str(device_path), str(otp_path), str(seeprom_path))
+        payload = self._call_native("attach", self._engine.attach, str(device_path), str(otp_path), str(seeprom_path))
         return AttachResult(
             attached=bool(payload.get("attached", False)),
             disk_id=str(payload.get("disk_id", "")),
@@ -186,30 +192,33 @@ class NativeWfsAdapter(BaseWfsAdapter):
         )
 
     def mkdir(self, path: str) -> None:
-        self._engine.mkdir(path)
+        self._call_native("mkdir", self._engine.mkdir, path)
 
     def create_file(self, path: str, size_hint: int = 0) -> None:
-        self._engine.create_file(path, int(size_hint))
+        self._call_native("create_file", self._engine.create_file, path, int(size_hint))
 
     def write_stream(self, path: str, data: bytes, offset: int = 0) -> int:
-        return int(self._engine.write_stream(path, data, int(offset)))
+        return int(self._call_native("write_stream", self._engine.write_stream, path, data, int(offset)))
 
     def delete(self, path: str) -> None:
-        self._engine.delete(path)
+        self._call_native("delete", self._engine.delete, path)
 
     def flush(self) -> None:
-        self._engine.flush()
+        self._call_native("flush", self._engine.flush)
 
     def integrity_check(self, scope: str = "/") -> dict:
-        raw = self._engine.integrity_check(scope)
+        raw = self._call_native("integrity_check", self._engine.integrity_check, scope)
         if isinstance(raw, str):
-            return json.loads(raw)
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise WfsAdapterError("Native integrity_check returned invalid JSON") from exc
         if isinstance(raw, dict):
             return raw
         raise WfsAdapterError("Unexpected integrity response from native backend")
 
     def detach(self) -> None:
-        self._engine.detach()
+        self._call_native("detach", self._engine.detach)
 
 
 def build_wfs_adapter(settings: Settings) -> BaseWfsAdapter:
