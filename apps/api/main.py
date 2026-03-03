@@ -36,6 +36,8 @@ def startup() -> None:
     if not settings.seeprom_path.exists():
         logger.warning("Key file missing: %s — attach will fail without it", settings.seeprom_path)
 
+    logger.info("NUS base URL: %s", settings.nus_base_url)
+
     init_engine(settings)
     init_db()
 

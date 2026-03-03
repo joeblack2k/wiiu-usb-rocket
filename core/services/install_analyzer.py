@@ -25,6 +25,10 @@ class InstallAnalyzer:
             reasons.append("ticket_or_rights_data_not_detected")
             requires_fallback = True
 
+        if result.tmd_info is None:
+            reasons.append("tmd_not_parsed")
+            requires_fallback = True
+
         oversize = [artifact for artifact in result.artifacts if artifact.size > self._max_direct_file_bytes]
         if oversize:
             reasons.append(

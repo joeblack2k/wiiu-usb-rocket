@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from core.config import Settings
+from core.nus.tmd import TmdError, TmdInfo, parse_tmd_bytes
 
 
 @dataclass(slots=True)
@@ -27,6 +28,8 @@ class DownloadResult:
     artifacts: list[DownloadedArtifact]
     tmd_present: bool
     ticket_present: bool
+    tmd_info: TmdInfo | None = None
+    cetk_bytes: bytes | None = None
 
 
 class DownloadService:
@@ -121,6 +124,8 @@ class DownloadService:
         artifacts: list[DownloadedArtifact] = []
         tmd_present = False
         ticket_present = False
+        tmd_info: TmdInfo | None = None
+        cetk_bytes: bytes | None = None
 
         if self._settings.nus_base_url:
             base = self._settings.nus_base_url.rstrip("/")
@@ -138,6 +143,10 @@ class DownloadService:
                 ticket_present = self._try_fetch_binary(f"{base}/{title_id}/cetk", cetk_path)
 
                 if tmd_present:
+                    try:
+                        tmd_info = parse_tmd_bytes(tmd_path.read_bytes())
+                    except (TmdError, OSError):
+                        tmd_info = None
                     artifacts.append(
                         DownloadedArtifact(
                             kind="tmd",
@@ -149,6 +158,7 @@ class DownloadService:
                         )
                     )
                 if ticket_present:
+                    cetk_bytes = cetk_path.read_bytes()
                     artifacts.append(
                         DownloadedArtifact(
                             kind="ticket",
@@ -189,5 +199,7 @@ class DownloadService:
             artifacts=artifacts,
             tmd_present=tmd_present,
             ticket_present=ticket_present,
+            tmd_info=tmd_info,
+            cetk_bytes=cetk_bytes,
         )
 

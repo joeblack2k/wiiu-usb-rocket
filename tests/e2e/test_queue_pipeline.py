@@ -4,6 +4,7 @@ from pathlib import Path
 from apps.worker.runner import QueueWorker
 from core.config import Settings
 from core.db import init_db, init_engine
+from core.nus.tmd import ContentRecord, TmdInfo
 from core.services.download_service import DownloadResult, DownloadService, DownloadedArtifact
 from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
@@ -66,6 +67,17 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
             size=len(content),
             sha256=sha256(content),
         )
+        tmd_info = TmdInfo(
+            content_count=1,
+            contents=[
+                ContentRecord(
+                    content_id=0,
+                    content_id_hex="00000000",
+                    index=b"\x00\x00",
+                    size=len(content),
+                )
+            ],
+        )
         return DownloadResult(
             title_id=title_id,
             region=region,
@@ -73,6 +85,8 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
             artifacts=[artifact],
             tmd_present=True,
             ticket_present=True,
+            tmd_info=tmd_info,
+            cetk_bytes=b"",
         )
 
     download_service.download_title = fake_download  # type: ignore[method-assign]
