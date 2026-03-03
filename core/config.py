@@ -27,7 +27,10 @@ class Settings(BaseSettings):
     catalog_url: str = "https://napi.v10lator.de/db?t=c"
     catalog_refresh_minutes: int = 60
 
-    nus_base_url: str = ""
+    nus_base_url: str = Field(
+        default="http://nus.cdn.wup.shop.nintendo.net/ccs/download",
+        alias="LINK",
+    )
     compatibility_mode: bool = True
 
     wfs_backend: str = "auto"
