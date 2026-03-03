@@ -58,6 +58,8 @@ add_library(${PROJECT_NAME}
     src/wfs_device.cpp
 )
 
+set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 if(BUILD_STATIC AND MSVC)
     set_property(TARGET ${PROJECT_NAME} PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
