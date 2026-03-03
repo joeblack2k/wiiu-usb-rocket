@@ -104,10 +104,6 @@ class DiskService:
         return response
 
     def attach_device(self, device_path: str) -> dict:
-        keys_ok, keys_error = self._keys_ok()
-        if not keys_ok:
-            raise WfsAdapterError(f"Cannot attach disk: {keys_error}")
-
         if self._wfs_adapter.backend_name != "simulated":
             if not device_path.startswith("/dev/"):
                 raise WfsAdapterError("Only /dev/* block devices are accepted")
@@ -115,6 +111,10 @@ class DiskService:
                 raise WfsAdapterError("Target path is not a block device")
             if not self._probe_wfs_signature(device_path):
                 raise WfsAdapterError("Target does not appear to be a WFS device")
+
+        keys_ok, keys_error = self._keys_ok()
+        if not keys_ok:
+            raise WfsAdapterError(f"Cannot attach disk: {keys_error}")
 
         attach_result = self._wfs_adapter.attach(device_path, self._settings.otp_path, self._settings.seeprom_path)
         if not attach_result.attached:
