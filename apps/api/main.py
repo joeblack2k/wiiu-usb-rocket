@@ -1,4 +1,5 @@
 import logging
+import math
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -23,9 +24,85 @@ templates = Jinja2Templates(directory="apps/api/templates")
 app = FastAPI(title="Direct Wii U USB Installer", version="1.0.0")
 
 
+def _configure_logging(level_name: str) -> None:
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+    else:
+        root.setLevel(level)
+
+
+def _build_index_params(
+    *,
+    search: str,
+    region: str,
+    category: str,
+    starts_with: str,
+    page: int,
+) -> str:
+    params: list[str] = []
+    values = {
+        "search": search,
+        "region": region,
+        "category": category,
+        "starts_with": starts_with,
+    }
+    for key, value in values.items():
+        if value:
+            params.append(f"{key}={value}")
+    if page > 1:
+        params.append(f"page={page}")
+    return "&".join(params)
+
+
+def _decorate_queue_items(queue_service: QueueService, queue_items: list[dict]) -> list[dict]:
+    decorated: list[dict] = []
+    for item in queue_items:
+        row = dict(item)
+        live = {
+            "overall_progress": float(item.get("progress", 0.0)),
+            "speed_bps": None,
+            "current_file": None,
+            "file_progress": None,
+            "phase_progress": None,
+            "updated_at": None,
+        }
+
+        latest_job = queue_service.get_latest_job_for_queue_item(item["id"])
+        if latest_job is not None:
+            row["job_id"] = latest_job["job_id"]
+
+            progress_event = queue_service.get_latest_event(latest_job["job_id"], "download_progress")
+            if progress_event is not None:
+                payload = progress_event["payload"]
+                try:
+                    live["overall_progress"] = float(payload.get("overall_progress", live["overall_progress"]))
+                except (TypeError, ValueError):
+                    pass
+                live["speed_bps"] = payload.get("speed_bps")
+                live["current_file"] = payload.get("current_file")
+                live["file_progress"] = payload.get("file_progress")
+                live["phase_progress"] = payload.get("phase_progress")
+                live["updated_at"] = progress_event.get("ts")
+
+            stats_event = queue_service.get_latest_event(latest_job["job_id"], "download_stats")
+            if stats_event is not None and live["speed_bps"] is None:
+                live["speed_bps"] = stats_event["payload"].get("speed_bps")
+
+        row["live_download"] = live
+        decorated.append(row)
+    return decorated
+
+
 @app.on_event("startup")
 def startup() -> None:
     settings = get_settings()
+    _configure_logging(settings.log_level)
+
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -36,7 +113,7 @@ def startup() -> None:
     if not settings.seeprom_path.exists():
         logger.warning("Key file missing: %s — attach will fail without it", settings.seeprom_path)
 
-    logger.info("NUS base URL: %s", settings.nus_base_url)
+    logger.info("startup: nus_base_url=%s log_level=%s", settings.nus_base_url, settings.log_level)
 
     init_engine(settings)
     init_db()
@@ -101,6 +178,7 @@ def healthz_details(request: Request) -> dict:
     native_loaded = False
     try:
         import wfs_core_native  # type: ignore  # noqa: F401
+
         native_loaded = True
     except ImportError:
         pass
@@ -129,11 +207,19 @@ def api_catalog(
     search: str = "",
     region: str = "",
     category: str = "",
+    starts_with: str = "",
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     services = get_services(request)
-    return services["catalog"].query(search=search, region=region, category=category, limit=limit, offset=offset)
+    return services["catalog"].query(
+        search=search,
+        region=region,
+        category=category,
+        starts_with=starts_with,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.post("/api/queue/items")
@@ -152,8 +238,9 @@ def api_queue_add(request: Request, payload: QueueItemCreateRequest) -> dict:
 @app.get("/api/queue/items")
 def api_queue_list(request: Request) -> dict:
     services = get_services(request)
+    items = _decorate_queue_items(services["queue"], services["queue"].list_items())
     return {
-        "items": services["queue"].list_items(),
+        "items": items,
         "running": services["worker"].is_running(),
     }
 
@@ -256,11 +343,17 @@ def ui_settings_downloads(
     search: str = Form(""),
     region: str = Form(""),
     category: str = Form(""),
+    starts_with: str = Form(""),
+    page: int = Form(1),
 ) -> RedirectResponse:
     services = get_services(request)
     services["settings_service"].set_bool("enable_downloads", enable_downloads)
-    params = "&".join(
-        f"{k}={v}" for k, v in [("search", search), ("region", region), ("category", category)] if v
+    params = _build_index_params(
+        search=search,
+        region=region,
+        category=category,
+        starts_with=starts_with,
+        page=page,
     )
     return RedirectResponse(url=f"/?{params}" if params else "/", status_code=303)
 
@@ -272,22 +365,61 @@ def ui_settings_fake_tickets(
     search: str = Form(""),
     region: str = Form(""),
     category: str = Form(""),
+    starts_with: str = Form(""),
+    page: int = Form(1),
 ) -> RedirectResponse:
     services = get_services(request)
     services["settings_service"].set_bool("allow_fake_tickets", allow_fake_tickets)
-    params = "&".join(
-        f"{k}={v}" for k, v in [("search", search), ("region", region), ("category", category)] if v
+    params = _build_index_params(
+        search=search,
+        region=region,
+        category=category,
+        starts_with=starts_with,
+        page=page,
     )
     return RedirectResponse(url=f"/?{params}" if params else "/", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)
-def ui_index(request: Request, search: str = "", region: str = "", category: str = "") -> HTMLResponse:
+def ui_index(
+    request: Request,
+    search: str = "",
+    region: str = "",
+    category: str = "",
+    starts_with: str = "",
+    page: int = Query(default=1, ge=1),
+) -> HTMLResponse:
     services = get_services(request)
-    catalog = services["catalog"].query(search=search, region=region, category=category, limit=100, offset=0)
-    queue_items = services["queue"].list_items()
+
+    page_size = 100
+    page = max(page, 1)
+    offset = (page - 1) * page_size
+    catalog = services["catalog"].query(
+        search=search,
+        region=region,
+        category=category,
+        starts_with=starts_with,
+        limit=page_size,
+        offset=offset,
+    )
+
+    total_pages = max(1, math.ceil(catalog["total"] / page_size))
+    if page > total_pages:
+        page = total_pages
+        offset = (page - 1) * page_size
+        catalog = services["catalog"].query(
+            search=search,
+            region=region,
+            category=category,
+            starts_with=starts_with,
+            limit=page_size,
+            offset=offset,
+        )
+
+    queue_items = _decorate_queue_items(services["queue"], services["queue"].list_items())
     settings = services["settings_service"].get_runtime_settings()
     disk = services["disk"].get_active_attachment()
+
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -300,6 +432,11 @@ def ui_index(request: Request, search: str = "", region: str = "", category: str
             "search": search,
             "region": region,
             "category": category,
+            "starts_with": starts_with,
+            "page": page,
+            "total_pages": total_pages,
+            "page_size": page_size,
+            "alphabet": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ["#"],
         },
     )
 
@@ -346,11 +483,12 @@ def ui_queue_add_bulk(
 @app.get("/queue", response_class=HTMLResponse)
 def ui_queue(request: Request) -> HTMLResponse:
     services = get_services(request)
+    queue_items = _decorate_queue_items(services["queue"], services["queue"].list_items())
     return templates.TemplateResponse(
         request,
         "queue.html",
         {
-            "queue_items": services["queue"].list_items(),
+            "queue_items": queue_items,
             "worker_running": services["worker"].is_running(),
         },
     )

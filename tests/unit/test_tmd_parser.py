@@ -1,9 +1,7 @@
 """
 Tests voor core/nus/tmd.py.
-
-Synthetische TMD bestanden worden gebouwd op de exact juiste byte-offsets
-zoals gedefinieerd in CHECK.md §5.
 """
+
 from __future__ import annotations
 
 import struct
@@ -14,23 +12,17 @@ from core.nus.tmd import TmdError, parse_tmd, parse_tmd_bytes
 
 _CONTENT_COUNT_OFFSET = 0x1DE
 _CONTENT_RECORDS_OFFSET = 0xB04
-_CONTENT_RECORD_SIZE = 0x24
 
 
-def _make_tmd(records: list[tuple[int, bytes, int]]) -> bytes:
-    """
-    Bouw een synthetisch TMD met opgegeven content records.
-
-    records: lijst van (content_id: int, index: bytes[2], size: int)
-    """
+def _make_tmd(records: list[tuple[int, bytes, int]], record_size: int = 0x30) -> bytes:
     count = len(records)
-    total = _CONTENT_RECORDS_OFFSET + count * _CONTENT_RECORD_SIZE
+    total = _CONTENT_RECORDS_OFFSET + count * record_size
     data = bytearray(total)
 
     struct.pack_into(">H", data, _CONTENT_COUNT_OFFSET, count)
 
     for i, (cid, idx, size) in enumerate(records):
-        base = _CONTENT_RECORDS_OFFSET + i * _CONTENT_RECORD_SIZE
+        base = _CONTENT_RECORDS_OFFSET + i * record_size
         struct.pack_into(">I", data, base + 0x00, cid)
         data[base + 0x04 : base + 0x06] = idx
         struct.pack_into(">Q", data, base + 0x08, size)
@@ -38,12 +30,11 @@ def _make_tmd(records: list[tuple[int, bytes, int]]) -> bytes:
     return bytes(data)
 
 
-# --- tests ------------------------------------------------------------------
-
 def test_parse_tmd_single_record() -> None:
     tmd = _make_tmd([(0x0000000A, b"\x00\x00", 1024)])
     info = parse_tmd_bytes(tmd)
     assert info.content_count == 1
+    assert info.record_size == 0x30
     assert len(info.contents) == 1
     rec = info.contents[0]
     assert rec.content_id == 0x0000000A
@@ -69,7 +60,6 @@ def test_parse_tmd_multiple_records() -> None:
 
 
 def test_parse_tmd_content_id_hex_no_prefix() -> None:
-    """Content ID hex-string mag geen '0x' prefix bevatten (voor URL-gebruik)."""
     tmd = _make_tmd([(0x0000000A, b"\x00\x00", 0)])
     info = parse_tmd_bytes(tmd)
     assert not info.contents[0].content_id_hex.startswith("0x")
@@ -96,16 +86,28 @@ def test_parse_tmd_raises_when_too_small_for_header() -> None:
 
 
 def test_parse_tmd_raises_when_truncated_records() -> None:
-    """TMD claimt 5 records maar bevat slechts data voor 1."""
-    data = bytearray(_CONTENT_RECORDS_OFFSET + _CONTENT_RECORD_SIZE)
+    data = bytearray(_CONTENT_RECORDS_OFFSET + 0x30)
     struct.pack_into(">H", data, _CONTENT_COUNT_OFFSET, 5)
     with pytest.raises(TmdError, match="te klein"):
         parse_tmd_bytes(bytes(data))
 
 
 def test_parse_tmd_index_is_raw_bytes() -> None:
-    """Index moet raw bytes zijn (2 bytes), niet een integer — wordt gebruikt als AES-IV prefix."""
     tmd = _make_tmd([(0x00000001, b"\x01\x02", 0)])
     info = parse_tmd_bytes(tmd)
     assert isinstance(info.contents[0].index, bytes)
     assert info.contents[0].index == b"\x01\x02"
+
+
+def test_parse_tmd_supports_legacy_0x24_records() -> None:
+    records = [
+        (0x000000AA, b"\x00\x00", 1234),
+        (0x000000BB, b"\x00\x01", 5678),
+    ]
+    tmd = _make_tmd(records, record_size=0x24)
+    info = parse_tmd_bytes(tmd)
+
+    assert info.record_size == 0x24
+    assert info.content_count == 2
+    assert info.contents[0].content_id_hex == "000000aa"
+    assert info.contents[1].content_id_hex == "000000bb"

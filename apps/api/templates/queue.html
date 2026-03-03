@@ -1,28 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Queue</h2>
-<p>Worker running: <strong>{{ worker_running }}</strong></p>
-<table>
+<p>Worker running: <strong id="worker-running">{{ worker_running }}</strong></p>
+<table id="queue-table">
   <thead>
     <tr>
       <th>ID</th>
-      <th>Title</th>
+      <th>Game</th>
       <th>Region</th>
       <th>State</th>
-      <th>Progress</th>
+      <th>Download</th>
+      <th>Speed</th>
+      <th>Current File</th>
       <th>Error</th>
       <th>Action</th>
     </tr>
   </thead>
   <tbody>
     {% for item in queue_items %}
-      <tr>
+      {% set live = item.live_download if item.live_download else {} %}
+      {% set p = ((live.overall_progress if live.overall_progress is not none else item.progress) * 100) | round(1) %}
+      <tr data-queue-id="{{ item.id }}">
         <td><code>{{ item.id }}</code></td>
-        <td><code>{{ item.title_id }}</code></td>
+        <td>{{ item.catalog_title or item.title_id }}</td>
         <td>{{ item.region }}</td>
-        <td>{{ item.state }}</td>
-        <td>{{ (item.progress * 100) | round(1) }}%</td>
-        <td>{{ item.error_code or "" }}</td>
+        <td class="q-state">{{ item.state }}</td>
+        <td>
+          <div style="background:#e2e8f0;height:0.65rem;border-radius:0.2rem;min-width:9rem;">
+            <div class="q-progress-fill" style="background:#2563eb;height:0.65rem;border-radius:0.2rem;width: {{ p }}%;"></div>
+          </div>
+          <div class="small q-progress-label">{{ p }}%</div>
+        </td>
+        <td class="q-speed">{{ (live.speed_bps ~ ' B/s') if live.speed_bps else '—' }}</td>
+        <td class="q-file">{{ live.current_file or '—' }}</td>
+        <td class="q-error">{{ item.error_code or "" }}</td>
         <td>
           {% if item.state == "DONE" %}
             <form method="post" action="/titles/{{ item.title_id }}/deinstall"
@@ -37,5 +48,83 @@
     {% endfor %}
   </tbody>
 </table>
-{% endblock %}
 
+<script>
+  (function () {
+    function formatSpeed(bps) {
+      if (!bps || bps <= 0) {
+        return '—';
+      }
+      var units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s'];
+      var idx = 0;
+      var value = bps;
+      while (value >= 1024 && idx < units.length - 1) {
+        value = value / 1024;
+        idx += 1;
+      }
+      return value.toFixed(idx === 0 ? 0 : 1) + ' ' + units[idx];
+    }
+
+    async function refreshQueue() {
+      try {
+        var response = await fetch('/api/queue/items', { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+        var payload = await response.json();
+        var rows = document.querySelectorAll('#queue-table tbody tr[data-queue-id]');
+
+        rows.forEach(function (row) {
+          var id = row.getAttribute('data-queue-id');
+          var item = payload.items.find(function (entry) { return entry.id === id; });
+          if (!item) {
+            return;
+          }
+
+          var live = item.live_download || {};
+          var rawProgress = (typeof live.overall_progress === 'number') ? live.overall_progress : item.progress;
+          var pct = Math.max(0, Math.min(100, rawProgress * 100));
+
+          var stateEl = row.querySelector('.q-state');
+          if (stateEl) {
+            stateEl.textContent = item.state;
+          }
+
+          var barEl = row.querySelector('.q-progress-fill');
+          if (barEl) {
+            barEl.style.width = pct.toFixed(1) + '%';
+          }
+
+          var labelEl = row.querySelector('.q-progress-label');
+          if (labelEl) {
+            labelEl.textContent = pct.toFixed(1) + '%';
+          }
+
+          var speedEl = row.querySelector('.q-speed');
+          if (speedEl) {
+            speedEl.textContent = formatSpeed(live.speed_bps || 0);
+          }
+
+          var fileEl = row.querySelector('.q-file');
+          if (fileEl) {
+            fileEl.textContent = live.current_file || '—';
+          }
+
+          var errorEl = row.querySelector('.q-error');
+          if (errorEl) {
+            errorEl.textContent = item.error_code || '';
+          }
+        });
+
+        var workerRunning = document.getElementById('worker-running');
+        if (workerRunning) {
+          workerRunning.textContent = String(payload.running);
+        }
+      } catch (err) {
+      }
+    }
+
+    setInterval(refreshQueue, 2000);
+  })();
+</script>
+{% endblock %}

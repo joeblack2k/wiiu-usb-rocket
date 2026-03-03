@@ -53,12 +53,29 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
     queue_service = QueueService()
     download_service = DownloadService(settings)
 
-    def fake_download(title_id: str, region: str, allow_fake_tickets: bool = True) -> DownloadResult:
+    def fake_download(
+        title_id: str,
+        region: str,
+        allow_fake_tickets: bool = True,
+        progress_callback=None,
+    ) -> DownloadResult:
         work_dir = settings.artifacts_dir / title_id
         work_dir.mkdir(parents=True, exist_ok=True)
         content = b"test-content"
         local_path = work_dir / "content.bin"
         local_path.write_bytes(content)
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "overall_progress": 0.5,
+                    "file_progress": 1.0,
+                    "speed_bps": 1024,
+                    "current_file": "content.bin",
+                    "done": True,
+                }
+            )
+
         artifact = DownloadedArtifact(
             kind="content",
             local_path=local_path,
@@ -108,3 +125,5 @@ def test_queue_pipeline_completes_done_with_direct_mode(tmp_path: Path) -> None:
     assert job is not None
     assert job["state"] == "DONE"
 
+    progress_event = queue_service.get_latest_event(result["job_id"], "download_progress")
+    assert progress_event is not None

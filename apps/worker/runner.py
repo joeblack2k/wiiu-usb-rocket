@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import json
+import logging
 import threading
 import time
 
@@ -12,6 +13,8 @@ from core.services.install_analyzer import InstallAnalyzer
 from core.services.queue_service import QueueService
 from core.services.settings_service import SettingsService
 from core.services.writer_engine import WriterEngine
+
+logger = logging.getLogger(__name__)
 
 
 class QueueWorker:
@@ -82,16 +85,32 @@ class QueueWorker:
 
         job = self._queue_service.create_job(queue_item_id, phase="queued", progress=0.0)
         job_id = job["job_id"]
+        logger.info("job.start job_id=%s queue_item_id=%s title_id=%s region=%s", job_id, queue_item_id, title_id, region)
 
         try:
             self._queue_service.set_state(queue_item_id, QueueState.DOWNLOADING, progress=0.1)
             self._queue_service.update_job(job_id, phase="downloading", progress=0.1)
             self._queue_service.add_job_event(job_id, "phase", {"phase": "downloading"})
 
+            def on_download_progress(payload: dict) -> None:
+                try:
+                    phase_progress = float(payload.get("overall_progress", 0.0))
+                except (TypeError, ValueError):
+                    phase_progress = 0.0
+                phase_progress = max(0.0, min(1.0, phase_progress))
+                queue_progress = 0.1 + phase_progress * 0.25
+
+                self._queue_service.set_state(queue_item_id, QueueState.DOWNLOADING, progress=queue_progress)
+                self._queue_service.update_job(job_id, phase="downloading", progress=queue_progress)
+                self._queue_service.add_job_event(job_id, "download_progress", payload)
+
             allow_fake_tickets = self._settings_service.get_bool("allow_fake_tickets", True)
             t_download_start = time.monotonic()
             download_result = self._download_service.download_title(
-                title_id=title_id, region=region, allow_fake_tickets=allow_fake_tickets
+                title_id=title_id,
+                region=region,
+                allow_fake_tickets=allow_fake_tickets,
+                progress_callback=on_download_progress,
             )
             elapsed_download = time.monotonic() - t_download_start
             total_dl_bytes = sum(a.size for a in download_result.artifacts)
@@ -100,6 +119,14 @@ class QueueWorker:
                 job_id,
                 "download_stats",
                 {"bytes": total_dl_bytes, "elapsed_sec": round(elapsed_download, 2), "speed_bps": speed_bps},
+            )
+            logger.info(
+                "job.download_done job_id=%s title_id=%s bytes=%s elapsed=%.2fs speed_bps=%s",
+                job_id,
+                title_id,
+                total_dl_bytes,
+                elapsed_download,
+                speed_bps,
             )
 
             self._queue_service.set_state(queue_item_id, QueueState.DOWNLOADED, progress=0.35)
@@ -116,24 +143,18 @@ class QueueWorker:
                         decrypted_artifacts.append(artifact)
                         continue
                     content_record = next(
-                        (r for r in download_result.tmd_info.contents
-                         if r.content_id_hex == artifact.local_path.stem),
+                        (r for r in download_result.tmd_info.contents if r.content_id_hex == artifact.local_path.stem),
                         None,
                     )
                     if content_record is None:
                         decrypted_artifacts.append(artifact)
                         continue
                     dec_path = artifact.local_path.with_suffix(".dec")
-                    written = decrypt_app(
-                        artifact.local_path, dec_path, ticket_info.title_key, content_record.index
-                    )
-                    # Truncate AES padding to actual content size from TMD
+                    written = decrypt_app(artifact.local_path, dec_path, ticket_info.title_key, content_record.index)
                     if content_record.size < written:
                         with dec_path.open("r+b") as fh:
                             fh.truncate(content_record.size)
                         written = content_record.size
-                    # SHA1 integrity check against TMD record hash
-                    # Overgeslagen bij nep-ticket: content op custom mirror kan andere hash hebben
                     if len(content_record.sha1_hash) == 20 and not download_result.fake_ticket:
                         digest = hashlib.sha1()
                         with dec_path.open("rb") as fh:
@@ -193,6 +214,7 @@ class QueueWorker:
                     message="Install completed",
                     diagnostics=diagnostics,
                 )
+                logger.info("job.done job_id=%s title_id=%s mode=direct", job_id, title_id)
                 return {"job_id": job_id, "state": QueueState.DONE.value}
 
             if allow_fallback:
@@ -210,6 +232,7 @@ class QueueWorker:
                     message="Fallback staged install completed",
                     diagnostics=diagnostics,
                 )
+                logger.info("job.done job_id=%s title_id=%s mode=fallback", job_id, title_id)
                 return {"job_id": job_id, "state": QueueState.DONE.value}
 
             diagnostics["error"] = "USB_ONLY_IMPOSSIBLE"
@@ -228,8 +251,10 @@ class QueueWorker:
                 message="Direct playable install is impossible on USB-only path",
                 diagnostics=diagnostics,
             )
+            logger.warning("job.failed job_id=%s title_id=%s reason=USB_ONLY_IMPOSSIBLE", job_id, title_id)
             return {"job_id": job_id, "state": QueueState.FAILED.value}
         except Exception as exc:
+            logger.exception("job.failed job_id=%s title_id=%s error=%s", job_id, title_id, exc)
             self._queue_service.set_state(
                 queue_item_id,
                 QueueState.FAILED,

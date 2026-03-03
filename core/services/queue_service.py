@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import asc
+from sqlalchemy import asc, desc
 
 from core.db import session_scope
 from core.models.entities import Job, JobEvent, QueueItem
@@ -113,10 +113,39 @@ class QueueService:
                 return None
             return self.serialize_job(job)
 
+    def get_latest_job_for_queue_item(self, queue_item_id: str) -> dict | None:
+        with session_scope() as session:
+            job = (
+                session.query(Job)
+                .filter(Job.queue_item_id == queue_item_id)
+                .order_by(desc(Job.started_at), desc(Job.id))
+                .first()
+            )
+            if job is None:
+                return None
+            return self.serialize_job(job)
+
     def add_job_event(self, job_id: str, event_type: str, payload: dict, level: str = "INFO") -> None:
         with session_scope() as session:
             event = JobEvent(job_id=job_id, level=level, event_type=event_type, payload_json=json.dumps(payload))
             session.add(event)
+
+    def get_latest_event(self, job_id: str, event_type: str | None = None) -> dict | None:
+        with session_scope() as session:
+            query = session.query(JobEvent).filter(JobEvent.job_id == job_id)
+            if event_type:
+                query = query.filter(JobEvent.event_type == event_type)
+            event = query.order_by(desc(JobEvent.id)).first()
+            if event is None:
+                return None
+            return {
+                "id": event.id,
+                "job_id": event.job_id,
+                "level": event.level,
+                "event_type": event.event_type,
+                "payload": json.loads(event.payload_json),
+                "ts": event.ts.isoformat(),
+            }
 
     def get_job_events(self, job_id: str, event_type: str | None = None) -> list[dict]:
         with session_scope() as session:
@@ -174,4 +203,3 @@ class QueueService:
             "started_at": job.started_at.isoformat(),
             "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         }
-

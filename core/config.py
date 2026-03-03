@@ -4,8 +4,6 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEFAULT_NUS_URL = "http://nus.cdn.wup.shop.nintendo.net/ccs/download"
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -41,11 +39,7 @@ class Settings(BaseSettings):
 
     max_parallel_installs: int = 1
     download_timeout_seconds: int = 120
-
-    @property
-    def is_custom_mirror(self) -> bool:
-        """True als LINK= is ingesteld op een andere URL dan de standaard Nintendo NUS."""
-        return self.nus_base_url.rstrip("/") != _DEFAULT_NUS_URL.rstrip("/")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @property
     def artifacts_dir(self) -> Path:
@@ -67,4 +61,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

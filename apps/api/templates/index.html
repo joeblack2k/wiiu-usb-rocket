@@ -16,26 +16,44 @@
   <label>Search <input type="text" name="search" value="{{ search }}" /></label>
   <label>Category <input type="text" name="category" value="{{ category }}" /></label>
   <input type="hidden" name="region" value="{{ region }}" />
+  <input type="hidden" name="starts_with" value="{{ starts_with }}" />
+  <input type="hidden" name="page" value="1" />
   <button type="submit">Filter</button>
 </form>
 
-<div style="display:flex;gap:0.4rem;margin:0.5rem 0;">
+<div style="display:flex;gap:0.4rem;margin:0.5rem 0;flex-wrap:wrap;">
   {% for r in ["ALL", "EUR", "USA", "JPN"] %}
-    <a href="/?search={{ search }}&region={{ r }}&category={{ category }}"
+    {% set rv = '' if r == 'ALL' else r %}
+    <a href="/?search={{ search }}&region={{ rv }}&category={{ category }}&starts_with={{ starts_with }}&page=1"
        style="padding:0.3rem 0.8rem;border:1px solid #64748b;text-decoration:none;
               background:{{ '#334155' if region == r or (r == 'ALL' and not region) else 'transparent' }};
               color:{{ '#fff' if region == r or (r == 'ALL' and not region) else '#cbd5e1' }};">{{ r }}</a>
   {% endfor %}
 </div>
 
+<div style="display:flex;gap:0.3rem;margin:0.4rem 0 0.9rem 0;flex-wrap:wrap;">
+  <a href="/?search={{ search }}&region={{ region }}&category={{ category }}&starts_with=&page=1"
+     style="padding:0.25rem 0.55rem;border:1px solid #64748b;text-decoration:none;
+            background:{{ '#334155' if not starts_with else 'transparent' }};
+            color:{{ '#fff' if not starts_with else '#cbd5e1' }};">ALL</a>
+  {% for letter in alphabet %}
+    <a href="/?search={{ search }}&region={{ region }}&category={{ category }}&starts_with={{ letter }}&page=1"
+       style="padding:0.25rem 0.55rem;border:1px solid #64748b;text-decoration:none;
+              background:{{ '#334155' if starts_with == letter else 'transparent' }};
+              color:{{ '#fff' if starts_with == letter else '#cbd5e1' }};">{{ '0-9' if letter == '#' else letter }}</a>
+  {% endfor %}
+</div>
+
 <h2>Catalog</h2>
-<div class="controls" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
-  <p class="small" style="margin:0;">Total: {{ catalog["total"] }} | Source age: {{ catalog["source_age_sec"] }} sec</p>
+<div class="controls" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;flex-wrap:wrap;">
+  <p class="small" style="margin:0;">Total: {{ catalog["total"] }} | Source age: {{ catalog["source_age_sec"] }} sec | Page {{ page }} / {{ total_pages }}</p>
   <form method="post" action="/settings/downloads" style="margin:0;">
     <input type="hidden" name="enable_downloads" value="{{ 'false' if settings.enable_downloads else 'true' }}" />
     <input type="hidden" name="search" value="{{ search }}" />
     <input type="hidden" name="region" value="{{ region }}" />
     <input type="hidden" name="category" value="{{ category }}" />
+    <input type="hidden" name="starts_with" value="{{ starts_with }}" />
+    <input type="hidden" name="page" value="{{ page }}" />
     <button type="submit" style="background:{{ '#16a34a' if settings.enable_downloads else '#dc2626' }};color:#fff;border:none;padding:0.3rem 0.9rem;cursor:pointer;">
       Downloads: {{ "YES" if settings.enable_downloads else "NO" }}
     </button>
@@ -45,6 +63,8 @@
     <input type="hidden" name="search" value="{{ search }}" />
     <input type="hidden" name="region" value="{{ region }}" />
     <input type="hidden" name="category" value="{{ category }}" />
+    <input type="hidden" name="starts_with" value="{{ starts_with }}" />
+    <input type="hidden" name="page" value="{{ page }}" />
     <button type="submit" style="background:{{ '#16a34a' if settings.allow_fake_tickets else '#dc2626' }};color:#fff;border:none;padding:0.3rem 0.9rem;cursor:pointer;">
       Fake Ticket: {{ "AAN" if settings.allow_fake_tickets else "UIT" }}
     </button>
@@ -59,68 +79,66 @@
       <option value="fallback">fallback</option>
     </select>
     <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:0.4rem 1.2rem;cursor:pointer;">
-      &#11015; Download en Install ALL (<span id="sel-count">0</span> geselecteerd)
+      &#11015; Download en Install SELECTIE (<span id="sel-count">0</span> geselecteerd)
     </button>
   </div>
   <table>
     <thead>
       <tr>
         <th><input type="checkbox" id="sel-all" title="Selecteer alles" /></th>
-        <th>Title ID</th>
         <th>Name</th>
         <th>Region</th>
-        <th>Category</th>
+        <th>DLC/Game</th>
+        <th>Title ID</th>
       </tr>
     </thead>
     <tbody>
       {% for item in catalog["items"] %}
+        {% set cat = (item.category or '') | lower %}
         <tr>
           <td><input type="checkbox" class="sel-item" name="sel" value="{{ item.title_id }}:{{ item.region }}" /></td>
-          <td><code>{{ item.title_id }}</code></td>
-          <td>{{ item.name }}</td>
+          <td>{{ item.name or "(no name)" }}</td>
           <td>{{ item.region }}</td>
-          <td>{{ item.category }}</td>
+          <td>{{ "DLC" if "dlc" in cat else "Game" }}</td>
+          <td><code>{{ item.title_id }}</code></td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
 </form>
-<script>
-  (function() {
-    var selAll = document.getElementById('sel-all');
-    var items = document.querySelectorAll('.sel-item');
-    var count = document.getElementById('sel-count');
-    function updateCount() {
-      count.textContent = document.querySelectorAll('.sel-item:checked').length;
-    }
-    selAll.addEventListener('change', function() {
-      items.forEach(function(cb) { cb.checked = selAll.checked; });
-      updateCount();
-    });
-    items.forEach(function(cb) { cb.addEventListener('change', updateCount); });
-  })();
-</script>
 {% else %}
 <table>
   <thead>
     <tr>
-      <th>Title ID</th>
       <th>Name</th>
       <th>Region</th>
-      <th>Category</th>
+      <th>DLC/Game</th>
+      <th>Title ID</th>
     </tr>
   </thead>
   <tbody>
     {% for item in catalog["items"] %}
+      {% set cat = (item.category or '') | lower %}
       <tr>
-        <td><code>{{ item.title_id }}</code></td>
-        <td>{{ item.name }}</td>
+        <td>{{ item.name or "(no name)" }}</td>
         <td>{{ item.region }}</td>
-        <td>{{ item.category }}</td>
+        <td>{{ "DLC" if "dlc" in cat else "Game" }}</td>
+        <td><code>{{ item.title_id }}</code></td>
       </tr>
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
+
+{% if total_pages > 1 %}
+<div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin:0.75rem 0 1rem 0;">
+  {% for p in range(1, total_pages + 1) %}
+    <a href="/?search={{ search }}&region={{ region }}&category={{ category }}&starts_with={{ starts_with }}&page={{ p }}"
+       style="padding:0.25rem 0.6rem;border:1px solid #64748b;text-decoration:none;
+              background:{{ '#334155' if p == page else 'transparent' }};
+              color:{{ '#fff' if p == page else '#cbd5e1' }};">{{ p }}</a>
+  {% endfor %}
+</div>
 {% endif %}
 
 <h2>Queue</h2>
@@ -132,27 +150,40 @@
     <button type="submit">Pause Worker</button>
   </form>
 </div>
-<p>Worker running: <strong>{{ worker_running }}</strong></p>
+<p>Worker running: <strong id="worker-running">{{ worker_running }}</strong></p>
 
-<table>
+<table id="queue-table">
   <thead>
     <tr>
       <th>ID</th>
-      <th>Title</th>
+      <th>Game</th>
+      <th>Region</th>
       <th>State</th>
-      <th>Progress</th>
+      <th>Download</th>
+      <th>Speed</th>
+      <th>Current File</th>
       <th>Error</th>
       <th>Action</th>
     </tr>
   </thead>
   <tbody>
     {% for q in queue_items %}
-      <tr>
+      {% set live = q.live_download if q.live_download else {} %}
+      {% set p = ((live.overall_progress if live.overall_progress is not none else q.progress) * 100) | round(1) %}
+      <tr data-queue-id="{{ q.id }}">
         <td><code>{{ q.id }}</code></td>
-        <td><code>{{ q.title_id }}</code></td>
-        <td>{{ q.state }}</td>
-        <td>{{ (q.progress * 100) | round(1) }}%</td>
-        <td>{{ q.error_code or "" }}</td>
+        <td class="q-game">{{ q.catalog_title or q.title_id }}</td>
+        <td class="q-region">{{ q.region }}</td>
+        <td class="q-state">{{ q.state }}</td>
+        <td>
+          <div style="background:#e2e8f0;height:0.65rem;border-radius:0.2rem;min-width:9rem;">
+            <div class="q-progress-fill" style="background:#2563eb;height:0.65rem;border-radius:0.2rem;width: {{ p }}%;"></div>
+          </div>
+          <div class="small q-progress-label">{{ p }}%</div>
+        </td>
+        <td class="q-speed">{{ (live.speed_bps ~ ' B/s') if live.speed_bps else '—' }}</td>
+        <td class="q-file">{{ live.current_file or '—' }}</td>
+        <td class="q-error">{{ q.error_code or "" }}</td>
         <td style="display:flex;gap:0.4rem;flex-wrap:wrap;">
           <form method="post" action="/api/install/{{ q.id }}/execute">
             <button type="submit">Execute now</button>
@@ -170,4 +201,101 @@
     {% endfor %}
   </tbody>
 </table>
+
+<script>
+  (function () {
+    var selAll = document.getElementById('sel-all');
+    var items = document.querySelectorAll('.sel-item');
+    var count = document.getElementById('sel-count');
+    if (selAll && count) {
+      function updateCount() {
+        count.textContent = document.querySelectorAll('.sel-item:checked').length;
+      }
+      selAll.addEventListener('change', function () {
+        items.forEach(function (cb) { cb.checked = selAll.checked; });
+        updateCount();
+      });
+      items.forEach(function (cb) { cb.addEventListener('change', updateCount); });
+      updateCount();
+    }
+
+    function formatSpeed(bps) {
+      if (!bps || bps <= 0) {
+        return '—';
+      }
+      var units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s'];
+      var idx = 0;
+      var value = bps;
+      while (value >= 1024 && idx < units.length - 1) {
+        value = value / 1024;
+        idx += 1;
+      }
+      return value.toFixed(idx === 0 ? 0 : 1) + ' ' + units[idx];
+    }
+
+    async function refreshQueue() {
+      try {
+        var response = await fetch('/api/queue/items', { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+        var payload = await response.json();
+        var tbody = document.querySelector('#queue-table tbody');
+        if (!tbody) {
+          return;
+        }
+        var rows = tbody.querySelectorAll('tr[data-queue-id]');
+        rows.forEach(function (row) {
+          var id = row.getAttribute('data-queue-id');
+          var item = payload.items.find(function (entry) { return entry.id === id; });
+          if (!item) {
+            return;
+          }
+
+          var live = item.live_download || {};
+          var rawProgress = (typeof live.overall_progress === 'number') ? live.overall_progress : item.progress;
+          var pct = Math.max(0, Math.min(100, rawProgress * 100));
+
+          var stateEl = row.querySelector('.q-state');
+          if (stateEl) {
+            stateEl.textContent = item.state;
+          }
+
+          var barEl = row.querySelector('.q-progress-fill');
+          if (barEl) {
+            barEl.style.width = pct.toFixed(1) + '%';
+          }
+
+          var labelEl = row.querySelector('.q-progress-label');
+          if (labelEl) {
+            labelEl.textContent = pct.toFixed(1) + '%';
+          }
+
+          var speedEl = row.querySelector('.q-speed');
+          if (speedEl) {
+            speedEl.textContent = formatSpeed(live.speed_bps || 0);
+          }
+
+          var fileEl = row.querySelector('.q-file');
+          if (fileEl) {
+            fileEl.textContent = live.current_file || '—';
+          }
+
+          var errorEl = row.querySelector('.q-error');
+          if (errorEl) {
+            errorEl.textContent = item.error_code || '';
+          }
+        });
+
+        var workerRunning = document.getElementById('worker-running');
+        if (workerRunning) {
+          workerRunning.textContent = String(payload.running);
+        }
+      } catch (err) {
+      }
+    }
+
+    setInterval(refreshQueue, 2000);
+  })();
+</script>
 {% endblock %}

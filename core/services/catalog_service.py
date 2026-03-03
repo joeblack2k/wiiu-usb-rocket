@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,8 @@ import httpx
 from core.catalog.parser import CatalogItem, parse_catalog_feed
 from core.catalog.vault_archive import VaultCatalogError, load_vault_catalog
 from core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -80,6 +83,7 @@ class CatalogService:
             return
         except Exception as upstream_exc:
             upstream_error = f"{type(upstream_exc).__name__}: {upstream_exc}"
+            logger.warning("catalog.refresh.remote_failed: %s", upstream_error)
 
         try:
             vault_items = load_vault_catalog(self._settings.vault_archive_path, self._settings.vault_extract_root)
@@ -89,16 +93,16 @@ class CatalogService:
             self._last_error = f"upstream_failed: {upstream_error}"
             self._next_retry_at = now + timedelta(minutes=5)
             self._save_cache_to_disk()
+            logger.info("catalog.refresh.vault_ok items=%s", len(vault_items))
             return
         except VaultCatalogError as vault_exc:
             if vault_exc.error_code == "vault_not_found":
                 self._last_error = upstream_error
             else:
                 self._last_error = f"upstream_failed: {upstream_error}; vault_failed: [{vault_exc.error_code}] {vault_exc}"
-        except Exception as vault_exc:  # pragma: no cover - defensive guard
+        except Exception as vault_exc:
             self._last_error = f"upstream_failed: {upstream_error}; vault_failed: {type(vault_exc).__name__}: {vault_exc}"
 
-        # avoid hammering unstable endpoints and broken local archives
         self._next_retry_at = now + timedelta(minutes=5)
 
     def force_refresh(self) -> None:
@@ -121,12 +125,31 @@ class CatalogService:
         self._next_retry_at = None
         self._source = "remote"
         self._save_cache_to_disk()
+        logger.info("catalog.refresh.remote_ok items=%s", len(items))
+
+    @staticmethod
+    def _matches_starts_with(item: CatalogItem, starts_with: str) -> bool:
+        token = starts_with.strip().upper()
+        if not token:
+            return True
+
+        key = (item.name or "").strip()
+        if not key:
+            key = item.title_id
+        if not key:
+            return False
+
+        first_char = key[0].upper()
+        if token == "#":
+            return first_char.isdigit()
+        return first_char == token[0]
 
     def query(
         self,
         search: str = "",
         region: str = "",
         category: str = "",
+        starts_with: str = "",
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -144,6 +167,8 @@ class CatalogService:
                 items = [item for item in items if item.region.lower() == region.lower()]
             if category:
                 items = [item for item in items if item.category.lower() == category.lower()]
+            if starts_with:
+                items = [item for item in items if self._matches_starts_with(item, starts_with)]
 
             total = len(items)
             selected = items[offset : offset + limit]
@@ -165,6 +190,7 @@ class CatalogService:
                 "source_age_sec": source_age_sec,
                 "source_status": source_status,
                 "last_error": self._last_error,
+                "starts_with": starts_with,
             }
 
     def get_source_status(self) -> dict:
@@ -178,8 +204,10 @@ class CatalogService:
         stamp_path = extract_root / "vault" / ".vault_stamp"
         if stamp_path.exists():
             import os
+
             mtime = os.path.getmtime(stamp_path)
             from datetime import datetime, timezone
+
             last_extract_time = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
         with self._lock:
@@ -196,7 +224,7 @@ class CatalogService:
             "last_error": last_error,
         }
 
-    def lookup(self, title_id: str) -> "CatalogItem | None":
+    def lookup(self, title_id: str) -> CatalogItem | None:
         lowered = title_id.lower()
         with self._lock:
             for item in self._items:

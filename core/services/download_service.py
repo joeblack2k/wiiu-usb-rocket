@@ -1,6 +1,8 @@
 import hashlib
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,8 @@ from core.nus.fake_ticket import generate_fake_cetk
 from core.nus.tmd import TmdError, TmdInfo, parse_tmd_bytes
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass(slots=True)
@@ -48,44 +52,130 @@ class DownloadService:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def _download_with_resume(self, url: str, dest: Path) -> None:
+    @staticmethod
+    def _extract_total_size(response: httpx.Response, append: bool, existing_size: int) -> int | None:
+        content_range = response.headers.get("Content-Range", "")
+        if "/" in content_range:
+            tail = content_range.rsplit("/", 1)[-1].strip()
+            if tail and tail != "*":
+                try:
+                    return int(tail)
+                except ValueError:
+                    pass
+
+        content_length = response.headers.get("Content-Length")
+        if content_length:
+            try:
+                raw_len = int(content_length)
+                return existing_size + raw_len if append else raw_len
+            except ValueError:
+                return None
+        return None
+
+    def _download_with_resume(
+        self,
+        url: str,
+        dest: Path,
+        progress_callback: ProgressCallback | None = None,
+        progress_meta: dict[str, Any] | None = None,
+    ) -> int:
         timeout = httpx.Timeout(float(self._settings.download_timeout_seconds))
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         existing_size = dest.stat().st_size if dest.exists() else 0
-        headers = {}
+        headers: dict[str, str] = {}
         if existing_size > 0:
             headers["Range"] = f"bytes={existing_size}-"
 
         with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=True) as response:
             if response.status_code == 416:
-                return
+                if progress_callback is not None:
+                    payload = dict(progress_meta or {})
+                    payload.update(
+                        {
+                            "file_bytes_downloaded": existing_size,
+                            "file_bytes_total": existing_size,
+                            "speed_bps": 0,
+                            "done": True,
+                        }
+                    )
+                    progress_callback(payload)
+                return existing_size
+
             response.raise_for_status()
             append = response.status_code == 206 and existing_size > 0
+            if not append:
+                existing_size = 0
+
+            total_size = self._extract_total_size(response, append=append, existing_size=existing_size)
             mode = "ab" if append else "wb"
+            start_ts = time.monotonic()
+            bytes_this_session = 0
+            last_emit_ts = start_ts
+
+            def emit(done: bool = False) -> None:
+                nonlocal last_emit_ts
+                if progress_callback is None:
+                    return
+                now = time.monotonic()
+                if not done and (now - last_emit_ts) < 0.35:
+                    return
+
+                elapsed = max(now - start_ts, 1e-6)
+                file_downloaded = existing_size + bytes_this_session
+                speed_bps = int(bytes_this_session / elapsed)
+
+                payload = dict(progress_meta or {})
+                payload.update(
+                    {
+                        "file_bytes_downloaded": file_downloaded,
+                        "file_bytes_total": total_size,
+                        "speed_bps": speed_bps,
+                        "done": done,
+                    }
+                )
+                progress_callback(payload)
+                last_emit_ts = now
+
+            emit(done=False)
             with dest.open(mode) as output:
                 for chunk in response.iter_bytes(1024 * 128):
-                    if chunk:
-                        output.write(chunk)
+                    if not chunk:
+                        continue
+                    output.write(chunk)
+                    bytes_this_session += len(chunk)
+                    emit(done=False)
+
+            emit(done=True)
+
+        return dest.stat().st_size
 
     def _try_fetch_json(self, url: str) -> dict[str, Any] | None:
         timeout = httpx.Timeout(float(self._settings.download_timeout_seconds))
         try:
-            response = httpx.get(url, timeout=timeout)
+            response = httpx.get(url, timeout=timeout, follow_redirects=True)
             if response.status_code != 200:
+                logger.debug("Manifest fetch non-200: url=%s status=%s", url, response.status_code)
                 return None
             return response.json()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Manifest fetch failed: url=%s error=%s", url, exc)
             return None
 
-    def _try_fetch_binary(self, url: str, dest: Path) -> bool:
+    def _try_fetch_binary(self, url: str, dest: Path, progress_callback: ProgressCallback | None = None) -> bool:
         try:
-            self._download_with_resume(url, dest)
-            return dest.exists() and dest.stat().st_size > 0
-        except Exception:
+            size = self._download_with_resume(url, dest, progress_callback=progress_callback)
+            return size > 0
+        except Exception as exc:
+            logger.debug("Binary fetch failed: url=%s path=%s error=%s", url, dest, exc)
             return False
 
-    def _materialize_manifest(self, title_id: str, manifest: dict, work_dir: Path) -> list[DownloadedArtifact]:
+    def _materialize_manifest(
+        self,
+        title_id: str,
+        manifest: dict,
+        work_dir: Path,
+    ) -> list[DownloadedArtifact]:
         artifacts: list[DownloadedArtifact] = []
         files = manifest.get("files", [])
         for index, file_spec in enumerate(files):
@@ -121,7 +211,13 @@ class DownloadService:
             )
         return artifacts
 
-    def download_title(self, title_id: str, region: str, allow_fake_tickets: bool = True) -> DownloadResult:
+    def download_title(
+        self,
+        title_id: str,
+        region: str,
+        allow_fake_tickets: bool = True,
+        progress_callback: ProgressCallback | None = None,
+    ) -> DownloadResult:
         title_id = title_id.lower()
         work_dir = self._settings.artifacts_dir / title_id
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -133,11 +229,64 @@ class DownloadService:
         cetk_bytes: bytes | None = None
         fake_ticket = False
 
+        logger.info(
+            "download.start title_id=%s region=%s base=%s allow_fake_tickets=%s",
+            title_id,
+            region,
+            self._settings.nus_base_url,
+            allow_fake_tickets,
+        )
+
+        def build_progress_handler(
+            *,
+            file_kind: str,
+            current_file: str,
+            phase_start: float,
+            phase_span: float,
+            content_id: str | None = None,
+        ) -> ProgressCallback:
+            def _handler(payload: dict[str, Any]) -> None:
+                if progress_callback is None:
+                    return
+
+                file_downloaded = int(payload.get("file_bytes_downloaded") or 0)
+                file_total_raw = payload.get("file_bytes_total")
+                file_total = int(file_total_raw) if isinstance(file_total_raw, int | float) else None
+                speed_bps = int(payload.get("speed_bps") or 0)
+                done = bool(payload.get("done"))
+
+                if file_total and file_total > 0:
+                    file_progress = max(0.0, min(1.0, file_downloaded / file_total))
+                else:
+                    file_progress = 1.0 if done else 0.0
+
+                overall_progress = max(0.0, min(1.0, phase_start + phase_span * file_progress))
+
+                progress_callback(
+                    {
+                        "title_id": title_id,
+                        "region": region,
+                        "file_kind": file_kind,
+                        "current_file": current_file,
+                        "content_id": content_id,
+                        "file_bytes_downloaded": file_downloaded,
+                        "file_bytes_total": file_total,
+                        "speed_bps": speed_bps,
+                        "file_progress": file_progress,
+                        "phase_progress": overall_progress,
+                        "overall_progress": overall_progress,
+                        "done": done,
+                    }
+                )
+
+            return _handler
+
         if self._settings.nus_base_url:
             base = self._settings.nus_base_url.rstrip("/")
             manifest_url = f"{base}/{title_id}/manifest.json"
             manifest = self._try_fetch_json(manifest_url)
             if manifest is not None:
+                logger.info("download.manifest.hit title_id=%s url=%s", title_id, manifest_url)
                 artifacts.extend(self._materialize_manifest(title_id, manifest, work_dir))
                 tmd_present = bool(manifest.get("tmd_present", False))
                 ticket_present = bool(manifest.get("ticket_present", False))
@@ -145,14 +294,44 @@ class DownloadService:
             if not artifacts:
                 tmd_path = work_dir / "tmd"
                 cetk_path = work_dir / "cetk"
-                tmd_present = self._try_fetch_binary(f"{base}/{title_id}/tmd", tmd_path)
-                ticket_present = self._try_fetch_binary(f"{base}/{title_id}/cetk", cetk_path)
+
+                logger.info("download.tmd.start title_id=%s", title_id)
+                tmd_present = self._try_fetch_binary(
+                    f"{base}/{title_id}/tmd",
+                    tmd_path,
+                    progress_callback=build_progress_handler(
+                        file_kind="tmd",
+                        current_file="tmd",
+                        phase_start=0.0,
+                        phase_span=0.05,
+                    ),
+                )
+
+                logger.info("download.ticket.start title_id=%s", title_id)
+                ticket_present = self._try_fetch_binary(
+                    f"{base}/{title_id}/cetk",
+                    cetk_path,
+                    progress_callback=build_progress_handler(
+                        file_kind="ticket",
+                        current_file="cetk",
+                        phase_start=0.05,
+                        phase_span=0.05,
+                    ),
+                )
 
                 if tmd_present:
                     try:
                         tmd_info = parse_tmd_bytes(tmd_path.read_bytes())
-                    except (TmdError, OSError):
+                        logger.info(
+                            "download.tmd.parsed title_id=%s content_count=%s record_size=0x%x",
+                            title_id,
+                            tmd_info.content_count,
+                            tmd_info.record_size,
+                        )
+                    except (TmdError, OSError) as exc:
+                        logger.exception("download.tmd.parse_failed title_id=%s error=%s", title_id, exc)
                         tmd_info = None
+
                     artifacts.append(
                         DownloadedArtifact(
                             kind="tmd",
@@ -163,6 +342,7 @@ class DownloadService:
                             sha256=self._hash_file(tmd_path),
                         )
                     )
+
                 if ticket_present:
                     cetk_bytes = cetk_path.read_bytes()
                     artifacts.append(
@@ -181,11 +361,7 @@ class DownloadService:
                         cetk_path.write_bytes(cetk_bytes)
                         ticket_present = True
                         fake_ticket = True
-                        logger.warning(
-                            "Geen cetk gevonden op mirror voor %s — nep-ticket gegenereerd (nul-sleutel). "
-                            "Content moet versleuteld zijn met een nul-titlekey.",
-                            title_id,
-                        )
+                        logger.warning("download.ticket.synthetic title_id=%s", title_id)
                         artifacts.append(
                             DownloadedArtifact(
                                 kind="ticket",
@@ -197,15 +373,45 @@ class DownloadService:
                             )
                         )
                     except Exception as exc:
-                        logger.warning("Nep-ticket generatie mislukt voor %s: %s", title_id, exc)
+                        logger.exception("download.ticket.synthetic_failed title_id=%s error=%s", title_id, exc)
 
-                if tmd_info is not None:
-                    for record in tmd_info.contents:
+                if tmd_info is not None and tmd_info.contents:
+                    content_total = max(1, len(tmd_info.contents))
+                    for content_index, record in enumerate(tmd_info.contents):
                         content_path = work_dir / f"{record.content_id_hex}.app"
-                        self._download_with_resume(
-                            f"{base}/{title_id}/{record.content_id_hex}",
-                            content_path,
+                        content_url = f"{base}/{title_id}/{record.content_id_hex}"
+                        phase_start = 0.10 + (0.90 * content_index / content_total)
+                        phase_span = 0.90 / content_total
+
+                        logger.info(
+                            "download.content.start title_id=%s content=%s index=%s/%s",
+                            title_id,
+                            record.content_id_hex,
+                            content_index + 1,
+                            content_total,
                         )
+
+                        try:
+                            self._download_with_resume(
+                                content_url,
+                                content_path,
+                                progress_callback=build_progress_handler(
+                                    file_kind="content",
+                                    current_file=f"{record.content_id_hex}.app",
+                                    phase_start=phase_start,
+                                    phase_span=phase_span,
+                                    content_id=record.content_id_hex,
+                                ),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "download.content.failed title_id=%s content=%s url=%s",
+                                title_id,
+                                record.content_id_hex,
+                                content_url,
+                            )
+                            raise
+
                         artifacts.append(
                             DownloadedArtifact(
                                 kind="content",
@@ -239,6 +445,17 @@ class DownloadService:
                 )
             )
 
+        total_bytes = sum(item.size for item in artifacts)
+        logger.info(
+            "download.done title_id=%s artifacts=%s bytes=%s tmd=%s ticket=%s fake_ticket=%s",
+            title_id,
+            len(artifacts),
+            total_bytes,
+            tmd_present,
+            ticket_present,
+            fake_ticket,
+        )
+
         return DownloadResult(
             title_id=title_id,
             region=region,
@@ -250,4 +467,3 @@ class DownloadService:
             cetk_bytes=cetk_bytes,
             fake_ticket=fake_ticket,
         )
-
