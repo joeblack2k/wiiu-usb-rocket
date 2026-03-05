@@ -1,55 +1,243 @@
-# Direct Wii U USB Installer
+# WiiDownloader — Direct Wii U USB Installer
 
-Dockerized FastAPI + worker application that manages a web queue, fetches catalog data, downloads title artifacts, and writes to Wii U WFS targets through an integrated native `wfs_core` module built from vendored `wfslib`/`wfs-tools` source.
+WiiDownloader is a web app that helps you queue Wii U titles, download content, and write installs to a Wii U USB disk.
 
-## Features
+It has two ways to run:
+- **Docker mode** (good for Linux servers/NAS)
+- **Single-command mode** (`python3 wiidownloader.py`) for local use
 
-- REST API v1 for catalog, queue, jobs, disk scanning/attach, install execution, and fallback settings.
-- Server-rendered Web GUI with queue and status pages.
-- SQLite-backed queue/job state machine.
-- Catalog parser/cache for NUSspli C-array feed format.
-- Safe attach flow with key checks and disk guardrails.
-- Worker pipeline with explicit fallback behavior and diagnostics.
-- Vendored `wfslib` + patch scaffold for mutation primitives in native layer.
+---
 
-## Quick start
+## 1) Very Important Safety Notes
 
-1. Put keys in `./keys`:
-   - `keys/otp.bin` (0x400 bytes)
-   - `keys/seeprom.bin` (0x200 bytes)
-   - optional `keys/vault.tar.gz` (user-supplied vault archive used to generate local catalog fallback)
-2. Start with Docker Compose:
+- Use only your own legal dumps/backups.
+- This tool writes directly to USB block devices. Choosing the wrong disk can destroy data.
+- `otp.bin` and `seeprom.bin` are sensitive per-console key files. **Never share or upload them.**
+- Nintendo-valid signatures cannot be generated locally from `otp.bin`/`seeprom.bin` alone.
 
-```bash
-docker compose up --build
-```
+---
 
-3. Open (default compose port):
-   - API docs: `http://localhost:18080/docs`
-   - Web UI: `http://localhost:18080/`
+## 2) What works on which OS?
 
-## Environment
+| Platform | App UI / Queue | USB scan | Real Wii U disk write |
+|---|---:|---:|---:|
+| Linux | ✅ | ✅ | ✅ (recommended) |
+| Windows | ✅ | ✅ via WSL/Linux backend | ✅ via WSL2 + USB passthrough |
+| macOS | ✅ | ✅ via Linux VM backend | ✅ via Linux VM + USB passthrough |
 
-- `WIIU_DISK=/dev/sdX` optional default target.
-- `WIIU_COMMON_KEY=<32 hex chars>` required for encrypted title decryption.
-- `ALLOW_FALLBACK=true|false` app default `false` (compose default `true`).
-- `WFS_BACKEND=auto|native|simulated` app default `auto` (compose default `native`).
-- `DRY_RUN=true|false` app default `true` (compose default `false`).
-- `FIRST_WRITE_CONFIRMED=true|false` app default `false` (compose default `true`).
+### Practical meaning
 
-## Development (local)
+- **For real USB installs, use a Linux runtime** (native Linux, WSL2 Linux distro, or Linux VM).
+- Windows/macOS can still use the browser UI, but the low-level disk attach/install path is validated on Linux hosts.
+
+---
+
+## 3) Fastest start (non-technical)
+
+### A. Download and start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-pytest
-uvicorn apps.api.main:app --reload
-
-# optional native build
-./scripts/build_native.sh
+git clone <repo-url>
+cd wiiu
+python3 wiidownloader.py
 ```
 
-## Operations
+The launcher will:
+- create `.venv`
+- install Python dependencies
+- try to build native `wfs_core`
+- start web server at `http://<your-ip>:18180`
+- open your browser automatically
 
-- Release/rollback runbook: `docs/release-rollback.md`
+If browser does not open, manually go to:
+- `http://127.0.0.1:18180` (same machine)
+- or `http://<LAN-IP>:18180` (from another device)
+
+### B. Put key files in the right place
+
+Place these files in the `keys/` folder:
+- `keys/otp.bin` (1024 bytes)
+- `keys/seeprom.bin` (512 bytes)
+- optional `keys/vault.tar.gz` (user-supplied ticket vault)
+
+You can verify sizes quickly:
+
+```bash
+ls -l keys/otp.bin keys/seeprom.bin
+```
+
+---
+
+## 4) End-user workflow (scan USB + install games)
+
+1. Open **Status** page.
+2. Confirm:
+   - Keys = OK
+   - Backend = native
+3. Click **Scan USB disks**.
+4. Choose your Wii U disk and click **Attach**.
+5. Open **Catalog** page:
+   - Search by name
+   - Filter Region
+   - Filter Game / DLC
+6. Add one or multiple titles to queue.
+7. Open **Queue** page and click **Start Queue**.
+8. Watch live progress per title.
+9. Open **HDD** tab to inspect installed titles and space usage.
+
+If a job fails, open job details and check `Diagnostics` + `Events`.
+
+---
+
+## 5) Docker setup (Linux host)
+
+Use this when running on a Linux box/NAS.
+
+### A. Prepare folders
+
+```bash
+mkdir -p keys data logs
+```
+
+Put your key files in `keys/`.
+
+### B. Start
+
+```bash
+docker compose up --build -d
+```
+
+Default URL:
+- `http://localhost:18080`
+
+### C. Stop
+
+```bash
+docker compose down
+```
+
+---
+
+## 6) Windows guide (recommended path)
+
+For real USB writes on Windows, use **WSL2 + USB passthrough**.
+
+1. Install WSL2 (Ubuntu).
+2. Install Docker Desktop (optional) or run directly in WSL2.
+3. Attach USB disk into WSL2 (using `usbipd-win` workflow).
+4. Clone repo inside WSL and run:
+   ```bash
+   python3 wiidownloader.py
+   ```
+5. Open `http://localhost:18180` in Windows browser.
+
+If USB is not visible in WSL, disk scan/attach cannot work.
+
+---
+
+## 7) macOS guide (recommended path)
+
+For real USB writes on macOS, run a Linux VM (UTM/VMware/Parallels) and pass through the USB disk.
+
+1. Create Linux VM.
+2. Pass the Wii U USB disk to VM.
+3. Clone repo in VM.
+4. Run:
+   ```bash
+   python3 wiidownloader.py
+   ```
+5. Open VM IP on port `18180` from your Mac browser.
+
+---
+
+## 8) Required host dependencies (for native backend)
+
+On Debian/Ubuntu Linux:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  cmake ninja-build g++ make pkg-config \
+  libboost-dev libcrypto++-dev pybind11-dev
+```
+
+Then verify launcher can build native module:
+
+```bash
+python3 wiidownloader.py --check --no-browser
+```
+
+You want to see:
+- `backend=native`
+
+---
+
+## 9) Protect your keys (do this before pushing git)
+
+This repo is configured to ignore secrets:
+- `keys/`
+- `vault.tar.gz`
+- `vault/`
+
+Still verify before any push:
+
+```bash
+git status --short
+```
+
+It should **not** list `keys/otp.bin` or `keys/seeprom.bin`.
+
+If they ever show up accidentally:
+
+```bash
+git rm --cached -r keys
+```
+
+---
+
+## 10) Common errors and fixes
+
+### "No active disk attachment"
+- Open Status/HDD page.
+- Scan USB disks.
+- Attach correct `/dev/sdX` disk.
+
+### "Invalid WFS version"
+- Usually wrong device path or damaged filesystem metadata.
+- Re-scan and ensure it is the actual Wii U formatted USB disk.
+
+### "metadata-only download is not a valid install payload"
+- Title source has metadata but no installable content artifact.
+- Pick alternate region/source for that title.
+
+### "backend=simulated"
+- Native module did not build.
+- Install host dependencies and rerun `--check`.
+
+---
+
+## 11) Useful commands
+
+```bash
+# Start app without auto-opening browser
+python3 wiidownloader.py --no-browser
+
+# Bind custom host/port
+python3 wiidownloader.py --host 0.0.0.0 --port 18180
+
+# Validate setup only
+python3 wiidownloader.py --check
+```
+
+---
+
+## 12) Developer notes
+
+- API: FastAPI backend + queue worker + SQLite store
+- Native write path: integrated `wfslib`/`wfs-tools` sources via `wfs_core`
+- Source tree:
+  - `apps/` (API + worker)
+  - `core/` (services, models, settings)
+  - `native/wfs_core/` (C++ native module)
+  - `third_party/` (vendored upstream libs)
+

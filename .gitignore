@@ -11,12 +11,18 @@ dist/
 *.egg-info/
 .DS_Store
 
+# Local runtime state
 data/
 logs/
+
+# Never commit secrets / console keys
+keys/
+*.otp.bin
+*.seeprom.bin
+vault.tar.gz
+vault/
 
 third_party/wfslib/.git/
 third_party/wfs-tools/.git/
 
 native/wfs_core/build/
-
-keys/
