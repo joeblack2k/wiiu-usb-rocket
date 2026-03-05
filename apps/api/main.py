@@ -137,6 +137,10 @@ def startup() -> None:
         )
 
     queue_service = QueueService()
+    recovered_jobs = queue_service.recover_incomplete_jobs(reason="startup")
+    if recovered_jobs:
+        logger.warning("startup: recovered %s interrupted running job(s) as FAILED", recovered_jobs)
+
     catalog_service = CatalogService(settings)
     download_service = DownloadService(settings)
     analyzer = InstallAnalyzer()
@@ -149,6 +153,13 @@ def startup() -> None:
             logger.info("startup: auto-attached WIIU_DISK=%s", settings.wiiu_disk)
         except WfsAdapterError as exc:
             logger.warning("startup: failed to auto-attach WIIU_DISK=%s: %s", settings.wiiu_disk, exc)
+    else:
+        restored, restore_error = disk_service.restore_runtime_attachment()
+        if restored:
+            active = disk_service.get_active_attachment() or {}
+            logger.info("startup: restored active disk attachment %s", active.get("device_path", "unknown"))
+        elif restore_error != "no_active_attachment":
+            logger.warning("startup: failed to restore active disk attachment: %s", restore_error)
 
     readiness_service = ReadinessService(settings, settings_service, disk_service)
     writer_engine = WriterEngine(wfs_adapter, queue_service, settings_service)

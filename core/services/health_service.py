@@ -84,16 +84,17 @@ class ReadinessService:
         else:
             key_verified = bool(active_attachment.get("key_verified"))
             wfs_verified = bool(active_attachment.get("wfs_verified"))
+            runtime_ok, runtime_error = self._disk_service.runtime_attachment_status()
             path = str(active_attachment.get("device_path", "unknown"))
-            add_check(
-                "disk_attached_verified",
-                key_verified and wfs_verified,
-                (
-                    f"active disk verified ({path})"
-                    if key_verified and wfs_verified
-                    else f"active disk not fully verified ({path})"
-                ),
-            )
+            fully_verified = key_verified and wfs_verified and runtime_ok
+            if fully_verified:
+                message = f"active disk verified ({path})"
+            elif runtime_ok:
+                message = f"active disk not fully verified ({path})"
+            else:
+                message = f"active disk runtime not attached ({path}: {runtime_error or 'unknown error'})"
+
+            add_check("disk_attached_verified", fully_verified, message)
 
         backend_name = self._disk_service.backend_name
         backend_ok = dry_run or backend_name != "simulated"

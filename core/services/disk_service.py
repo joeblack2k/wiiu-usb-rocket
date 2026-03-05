@@ -268,6 +268,28 @@ class DiskService:
                 "attached_at": record.attached_at.isoformat(),
             }
 
+    def runtime_attachment_status(self) -> tuple[bool, str | None]:
+        try:
+            self._wfs_adapter.flush()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
+    def restore_runtime_attachment(self) -> tuple[bool, str | None]:
+        active = self.get_active_attachment()
+        if active is None:
+            return False, "no_active_attachment"
+
+        device_path = str(active.get("device_path") or "").strip()
+        if not device_path:
+            return False, "active_attachment_missing_device_path"
+
+        try:
+            self.attach_device(device_path)
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
     @staticmethod
     def device_fingerprint(device_path: str) -> str:
         return hashlib.sha256(device_path.encode("utf-8")).hexdigest()[:24]

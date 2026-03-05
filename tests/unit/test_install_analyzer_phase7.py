@@ -94,8 +94,8 @@ def test_download_rejects_tiny_tmd_and_ticket(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr(service, "_try_fetch_json", lambda _url: None)
 
-    def fake_download(_url: str, dest: Path, progress_callback=None, progress_meta=None) -> int:
-        del progress_callback, progress_meta
+    def fake_download(_url: str, dest: Path, progress_callback=None, progress_meta=None, expected_size=None) -> int:
+        del progress_callback, progress_meta, expected_size
         if dest.name in {"tmd", "cetk"}:
             payload = b"x" * 64
         else:
@@ -160,8 +160,8 @@ def test_download_manifest_presence_comes_from_artifacts(tmp_path: Path, monkeyp
     }
     monkeypatch.setattr(service, "_try_fetch_json", lambda _url: manifest)
 
-    def fake_download(url: str, dest: Path, progress_callback=None, progress_meta=None) -> int:
-        del progress_callback, progress_meta
+    def fake_download(url: str, dest: Path, progress_callback=None, progress_meta=None, expected_size=None) -> int:
+        del progress_callback, progress_meta, expected_size
         if url.endswith("/tmd"):
             payload = b"t" * 0xB04
         elif url.endswith("/cetk"):
@@ -205,8 +205,8 @@ def test_download_manifest_flags_do_not_override_missing_artifacts(
     }
     monkeypatch.setattr(service, "_try_fetch_json", lambda _url: manifest)
 
-    def fake_download(_url: str, dest: Path, progress_callback=None, progress_meta=None) -> int:
-        del progress_callback, progress_meta
+    def fake_download(_url: str, dest: Path, progress_callback=None, progress_meta=None, expected_size=None) -> int:
+        del progress_callback, progress_meta, expected_size
         payload = b"payload"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(payload)

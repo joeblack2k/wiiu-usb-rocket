@@ -2,7 +2,9 @@ import hashlib
 import json
 import logging
 import time
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _MIN_TMD_DOWNLOAD_SIZE = 0xB04
 _MIN_CETK_DOWNLOAD_SIZE = 0x1E4
+_PARALLEL_RANGE_RETRIES = 3
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -75,17 +78,202 @@ class DownloadService:
                 return None
         return None
 
-    def _download_with_resume(
+    @staticmethod
+    def _split_ranges(total_size: int, parts: int) -> list[tuple[int, int]]:
+        if total_size <= 0:
+            return []
+        parts = max(1, parts)
+        base = total_size // parts
+        extra = total_size % parts
+        ranges: list[tuple[int, int]] = []
+        offset = 0
+        for index in range(parts):
+            span = base + (1 if index < extra else 0)
+            if span <= 0:
+                continue
+            start = offset
+            end = start + span - 1
+            ranges.append((start, end))
+            offset = end + 1
+        return ranges
+
+    def _download_parallel_ranges(
         self,
         url: str,
         dest: Path,
+        total_size: int,
+        workers: int,
         progress_callback: ProgressCallback | None = None,
         progress_meta: dict[str, Any] | None = None,
     ) -> int:
         timeout = httpx.Timeout(float(self._settings.download_timeout_seconds))
         dest.parent.mkdir(parents=True, exist_ok=True)
 
+        ranges = self._split_ranges(total_size, workers)
+        part_paths = [dest.with_name(f"{dest.name}.part{index:02d}") for index in range(len(ranges))]
+        for part in part_paths:
+            try:
+                if part.exists():
+                    part.unlink()
+            except OSError:
+                pass
+
+        lock = threading.Lock()
+        progress = {index: 0 for index in range(len(ranges))}
+        started = time.monotonic()
+        last_emit = started
+
+        def emit(done: bool = False) -> None:
+            nonlocal last_emit
+            if progress_callback is None:
+                return
+
+            now = time.monotonic()
+            with lock:
+                if not done and (now - last_emit) < 0.35:
+                    return
+                downloaded = sum(progress.values())
+                last_emit = now
+
+            elapsed = max(now - started, 1e-6)
+            speed_bps = int(downloaded / elapsed)
+            payload = dict(progress_meta or {})
+            payload.update(
+                {
+                    "file_bytes_downloaded": downloaded,
+                    "file_bytes_total": total_size,
+                    "speed_bps": speed_bps,
+                    "done": done,
+                }
+            )
+            progress_callback(payload)
+
+        def worker(index: int, byte_range: tuple[int, int]) -> None:
+            start_byte, end_byte = byte_range
+            expected_len = end_byte - start_byte + 1
+            part_path = part_paths[index]
+            headers = {"Range": f"bytes={start_byte}-{end_byte}"}
+
+            last_error: Exception | None = None
+            for attempt in range(1, _PARALLEL_RANGE_RETRIES + 1):
+                local_written = 0
+                try:
+                    with lock:
+                        progress[index] = 0
+                    if part_path.exists():
+                        part_path.unlink()
+
+                    with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=True) as response:
+                        if response.status_code != 206:
+                            raise RuntimeError(
+                                f"Range request failed status={response.status_code} range={start_byte}-{end_byte}"
+                            )
+
+                        with part_path.open("wb") as handle:
+                            for chunk in response.iter_bytes(1024 * 128):
+                                if not chunk:
+                                    continue
+                                handle.write(chunk)
+                                local_written += len(chunk)
+                                with lock:
+                                    progress[index] = local_written
+                                emit(done=False)
+
+                    if local_written != expected_len:
+                        raise RuntimeError(
+                            f"Range size mismatch for {start_byte}-{end_byte}: got={local_written} expected={expected_len}"
+                        )
+
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    time.sleep(0.2 * attempt)
+
+            raise RuntimeError(
+                f"Parallel range worker failed for {start_byte}-{end_byte}: {last_error}"
+            )
+
+        try:
+            emit(done=False)
+            with ThreadPoolExecutor(max_workers=len(ranges)) as executor:
+                futures = [executor.submit(worker, index, byte_range) for index, byte_range in enumerate(ranges)]
+                for future in as_completed(futures):
+                    future.result()
+
+            with dest.open("wb") as output:
+                for part_path in part_paths:
+                    with part_path.open("rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            output.write(chunk)
+
+            emit(done=True)
+            return dest.stat().st_size
+        finally:
+            for part_path in part_paths:
+                try:
+                    if part_path.exists():
+                        part_path.unlink()
+                except OSError:
+                    pass
+
+    def _download_with_resume(
+        self,
+        url: str,
+        dest: Path,
+        progress_callback: ProgressCallback | None = None,
+        progress_meta: dict[str, Any] | None = None,
+        *,
+        expected_size: int | None = None,
+    ) -> int:
+        timeout = httpx.Timeout(float(self._settings.download_timeout_seconds))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
         existing_size = dest.stat().st_size if dest.exists() else 0
+        can_parallel = (
+            existing_size == 0
+            and isinstance(expected_size, int)
+            and expected_size >= int(self._settings.download_parallel_min_bytes)
+            and int(self._settings.download_max_threads) > 1
+        )
+
+        if can_parallel:
+            workers = min(
+                int(self._settings.download_max_threads),
+                max(2, int(expected_size // (8 * 1024 * 1024)) + 1),
+            )
+            workers = max(2, workers)
+            try:
+                logger.info(
+                    "download.parallel.start url=%s workers=%s expected_size=%s",
+                    url,
+                    workers,
+                    expected_size,
+                )
+                size = self._download_parallel_ranges(
+                    url,
+                    dest,
+                    int(expected_size),
+                    workers,
+                    progress_callback=progress_callback,
+                    progress_meta=progress_meta,
+                )
+                if size == int(expected_size):
+                    logger.info("download.parallel.done url=%s bytes=%s", url, size)
+                    return size
+                logger.warning(
+                    "download.parallel.size_mismatch url=%s got=%s expected=%s; fallback to single stream",
+                    url,
+                    size,
+                    expected_size,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("download.parallel.fallback url=%s error=%s", url, exc)
+                try:
+                    if dest.exists():
+                        dest.unlink()
+                except OSError:
+                    pass
+
         headers: dict[str, str] = {}
         if existing_size > 0:
             headers["Range"] = f"bytes={existing_size}-"
@@ -240,7 +428,10 @@ class DownloadService:
                 raise RuntimeError(f"Manifest file entry missing url for {relative_path}")
 
             local_path = work_dir / relative_path
-            self._download_with_resume(source_url, local_path)
+            expected_size = file_spec.get("size")
+            if not isinstance(expected_size, int):
+                expected_size = None
+            self._download_with_resume(source_url, local_path, expected_size=expected_size)
 
             size = local_path.stat().st_size
             sha256 = self._hash_file(local_path)
@@ -455,6 +646,7 @@ class DownloadService:
                                     phase_span=phase_span,
                                     content_id=record.content_id_hex,
                                 ),
+                                expected_size=int(record.size),
                             )
                         except Exception:
                             logger.exception(

@@ -167,6 +167,63 @@ class QueueService:
                 )
             return parsed
 
+    def recover_incomplete_jobs(self, reason: str = "service_restart") -> int:
+        in_progress_queue_states = {
+            QueueState.QUEUED.value,
+            QueueState.DOWNLOADING.value,
+            QueueState.DOWNLOADED.value,
+            QueueState.DECRYPTING.value,
+            QueueState.WRITING_WFS.value,
+            QueueState.VERIFYING.value,
+        }
+
+        recovered = 0
+        now = utcnow()
+        with session_scope() as session:
+            jobs = session.query(Job).filter(Job.state == JobState.RUNNING.value).all()
+            queue_item_ids: set[str] = set()
+
+            for job in jobs:
+                recovered += 1
+                queue_item_ids.add(job.queue_item_id)
+                diagnostics: dict = {}
+                if job.diagnostics_json:
+                    try:
+                        diagnostics = json.loads(job.diagnostics_json)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        diagnostics = {"raw": job.diagnostics_json}
+
+                diagnostics.update({"recovered": True, "reason": reason})
+                job.state = JobState.FAILED.value
+                job.phase = "failed"
+                job.progress = 1.0
+                job.message = "Recovered as failed after service restart"
+                job.diagnostics_json = json.dumps(diagnostics)
+                if job.finished_at is None:
+                    job.finished_at = now
+
+                session.add(
+                    JobEvent(
+                        job_id=job.id,
+                        level="WARNING",
+                        event_type="recovered",
+                        payload_json=json.dumps({"reason": reason}),
+                        ts=now,
+                    )
+                )
+
+            if queue_item_ids:
+                items = session.query(QueueItem).filter(QueueItem.id.in_(queue_item_ids)).all()
+                for item in items:
+                    if item.state in in_progress_queue_states:
+                        item.state = QueueState.FAILED.value
+                        item.progress = 1.0
+                        item.error_code = "INTERRUPTED"
+                        item.error_detail = "Recovered as failed after service restart"
+                        item.updated_at = now
+
+        return recovered
+
     @staticmethod
     def serialize_queue_item(item: QueueItem) -> dict:
         return {

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
 
     max_parallel_installs: int = 1
     download_timeout_seconds: int = 120
+    download_max_threads: int = Field(default=6, alias="DOWNLOAD_MAX_THREADS")
+    download_parallel_min_bytes: int = Field(default=8 * 1024 * 1024, alias="DOWNLOAD_PARALLEL_MIN_BYTES")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @property

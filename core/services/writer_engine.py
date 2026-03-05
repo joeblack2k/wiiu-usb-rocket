@@ -122,13 +122,28 @@ class WriterEngine:
         if not dry_run and not first_write_confirmed:
             raise WfsAdapterError("First-write confirmation is required before mutating WFS")
 
-        wfs_path = f"/usr/title/{title_id.lower()}"
+        normalized_title = title_id.lower()
+        targets = [f"/usr/title/{normalized_title}", f"/install/{normalized_title}"]
         if dry_run:
-            return {"dry_run": True, "path": wfs_path, "deleted": False}
+            return {"dry_run": True, "targets": targets, "deleted": False}
 
-        self._wfs_adapter.delete(wfs_path)
+        removed_paths: list[str] = []
+        for target in targets:
+            try:
+                self._wfs_adapter.delete(target)
+                removed_paths.append(target)
+            except WfsAdapterError as exc:
+                if "not found" in str(exc).lower():
+                    continue
+                raise
+
         self._wfs_adapter.flush()
-        return {"dry_run": False, "path": wfs_path, "deleted": True}
+        return {
+            "dry_run": False,
+            "targets": targets,
+            "removed": bool(removed_paths),
+            "removed_paths": removed_paths,
+        }
 
     def staged_diagnostics(self, job_id: str) -> dict:
         events = self._queue_service.get_job_events(job_id)
