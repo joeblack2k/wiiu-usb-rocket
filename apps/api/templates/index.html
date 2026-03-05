@@ -13,7 +13,7 @@
 <div class="warn">Risk banner: direct playable writes may be technically impossible for some titles. Fallback is currently <strong>{{ "ON" if settings.allow_fallback else "OFF" }}</strong>.</div>
 
 {% if not common_key_present %}
-  <div class="warn">WIIU_COMMON_KEY ontbreekt in de omgeving; decryptie van encrypted titles zal falen.</div>
+  <div class="warn">WIIU common key ontbreekt; decryptie van encrypted titles zal falen. Zet hem via <strong>Status → Common Key</strong> of ENV.</div>
 {% endif %}
 
 <form method="get" action="/">

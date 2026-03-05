@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -9,7 +8,14 @@ from fastapi.templating import Jinja2Templates
 from apps.worker.runner import QueueWorker
 from core.config import get_settings
 from core.db import init_db, init_engine
-from core.schemas import AllowFakeTicketsRequest, DiskAttachRequest, EnableDownloadsRequest, FallbackSettingsRequest, QueueItemCreateRequest
+from core.schemas import (
+    AllowFakeTicketsRequest,
+    CommonKeySettingsRequest,
+    DiskAttachRequest,
+    EnableDownloadsRequest,
+    FallbackSettingsRequest,
+    QueueItemCreateRequest,
+)
 from core.services.catalog_service import CatalogService
 from core.services.disk_service import DiskService
 from core.services.download_service import DownloadService
@@ -115,10 +121,6 @@ def startup() -> None:
     if not settings.seeprom_path.exists():
         logger.warning("Key file missing: %s — attach will fail without it", settings.seeprom_path)
 
-    common_key_present = bool(os.environ.get("WIIU_COMMON_KEY", "").strip())
-    if not common_key_present:
-        logger.warning("WIIU_COMMON_KEY is not set; decryption stage will fail for encrypted titles")
-
     logger.info("startup: nus_base_url=%s log_level=%s", settings.nus_base_url, settings.log_level)
 
     init_engine(settings)
@@ -126,6 +128,13 @@ def startup() -> None:
 
     settings_service = SettingsService(settings)
     settings_service.bootstrap_defaults()
+    settings_service.bootstrap_common_key_env()
+
+    if not settings_service.common_key_present():
+        logger.warning(
+            "WIIU_COMMON_KEY is not set; encrypted NUS titles cannot be decrypted "
+            "(otp.bin/seeprom.bin are USB disk keys only)"
+        )
 
     queue_service = QueueService()
     catalog_service = CatalogService(settings)
@@ -224,7 +233,8 @@ def healthz_details(request: Request) -> dict:
             "seeprom": settings.seeprom_path.exists(),
         },
         "vault_present": settings.vault_archive_path.exists(),
-        "common_key_present": bool(os.environ.get("WIIU_COMMON_KEY", "").strip()),
+        "common_key_present": services["settings_service"].common_key_present(),
+        "common_key_source": services["settings_service"].common_key_source(),
     }
 
 
@@ -375,6 +385,24 @@ def api_settings_fake_tickets(request: Request, payload: AllowFakeTicketsRequest
     return {"allow_fake_tickets": value}
 
 
+@app.post("/api/settings/common-key")
+def api_settings_common_key(request: Request, payload: CommonKeySettingsRequest) -> dict:
+    services = get_services(request)
+    common_key_hex = payload.common_key_hex.strip()
+    try:
+        if common_key_hex:
+            services["settings_service"].set_common_key(common_key_hex)
+        else:
+            services["settings_service"].clear_common_key()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "common_key_present": services["settings_service"].common_key_present(),
+        "common_key_source": services["settings_service"].common_key_source(),
+    }
+
+
 @app.post("/settings/downloads")
 def ui_settings_downloads(
     request: Request,
@@ -417,6 +445,26 @@ def ui_settings_fake_tickets(
         page=page,
     )
     return RedirectResponse(url=f"/?{params}" if params else "/", status_code=303)
+
+
+@app.post("/settings/common-key")
+def ui_settings_common_key(
+    request: Request,
+    common_key_hex: str = Form(""),
+    redirect_to: str = Form("/status"),
+) -> RedirectResponse:
+    services = get_services(request)
+    value = common_key_hex.strip()
+    try:
+        if value:
+            services["settings_service"].set_common_key(value)
+        else:
+            services["settings_service"].clear_common_key()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    target = redirect_to if redirect_to.startswith("/") else "/status"
+    return RedirectResponse(url=target, status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -476,7 +524,8 @@ def ui_index(
             "total_pages": total_pages,
             "page_size": page_size,
             "alphabet": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ["#"],
-            "common_key_present": bool(os.environ.get("WIIU_COMMON_KEY", "").strip()),
+            "common_key_present": services["settings_service"].common_key_present(),
+        "common_key_source": services["settings_service"].common_key_source(),
         },
     )
 
@@ -553,6 +602,7 @@ def ui_job(request: Request, job_id: str) -> HTMLResponse:
 @app.get("/status", response_class=HTMLResponse)
 def ui_status(request: Request) -> HTMLResponse:
     services = get_services(request)
+    settings_service = services["settings_service"]
     disk_scan = services["disk"].scan_devices()
     return templates.TemplateResponse(
         request,
@@ -561,8 +611,11 @@ def ui_status(request: Request) -> HTMLResponse:
             "disk_scan": disk_scan,
             "readiness": services["readiness"].evaluate(),
             "active_disk": services["disk"].get_active_attachment(),
-            "settings": services["settings_service"].get_runtime_settings(),
+            "settings": settings_service.get_runtime_settings(),
             "worker_running": services["worker"].is_running(),
             "catalog_source": services["catalog"].get_source_status(),
+            "common_key_present": settings_service.common_key_present(),
+            "common_key_source": settings_service.common_key_source(),
+            "stored_common_key": settings_service.get_stored_common_key(),
         },
     )

@@ -66,11 +66,16 @@ class ReadinessService:
             "otp/seeprom keys are valid" if keys_ok else f"invalid key files ({keys_error or 'unknown error'})",
         )
 
-        common_key_present = bool(os.environ.get("WIIU_COMMON_KEY", "").strip())
+        common_key_present = self._settings_service.common_key_present()
+        common_key_source = self._settings_service.common_key_source()
         add_check(
             "common_key_present",
             common_key_present,
-            "WIIU_COMMON_KEY is set" if common_key_present else "WIIU_COMMON_KEY is missing",
+            (
+                f"WIIU_COMMON_KEY is available ({common_key_source})"
+                if common_key_present
+                else "WIIU_COMMON_KEY is missing"
+            ),
         )
 
         active_attachment = self._disk_service.get_active_attachment()

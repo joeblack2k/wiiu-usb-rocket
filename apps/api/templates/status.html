@@ -20,6 +20,30 @@
   <div class="warn">No active attached disk.</div>
 {% endif %}
 
+<h3>Common Key (NUS decryptie)</h3>
+<p>Present: <strong>{{ common_key_present }}</strong> | Source: <strong>{{ common_key_source }}</strong></p>
+<div class="warn">NUS ticket decryptie gebruikt een Wii U common key; dit komt niet uit <code>otp.bin</code>/<code>seeprom.bin</code>.</div>
+<form method="post" action="/settings/common-key" style="margin:0.6rem 0;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+  <input type="hidden" name="redirect_to" value="/status" />
+  <label>Common key (32 hex)
+    <input
+      type="text"
+      name="common_key_hex"
+      value="{{ stored_common_key }}"
+      maxlength="32"
+      pattern="[0-9a-fA-F]{32}"
+      placeholder="d7b00402659ba2abd2cb0db27fa2b656"
+      style="min-width:26rem;"
+    />
+  </label>
+  <button type="submit">Accept and reload</button>
+</form>
+<form method="post" action="/settings/common-key" style="margin:0.4rem 0 1rem 0;">
+  <input type="hidden" name="redirect_to" value="/status" />
+  <input type="hidden" name="common_key_hex" value="" />
+  <button type="submit">Clear common key</button>
+</form>
+
 <h3>Readiness checks</h3>
 <table>
   <thead>

@@ -24,3 +24,6 @@ class EnableDownloadsRequest(BaseModel):
 class AllowFakeTicketsRequest(BaseModel):
     allow_fake_tickets: bool
 
+
+class CommonKeySettingsRequest(BaseModel):
+    common_key_hex: str = Field(default="")
