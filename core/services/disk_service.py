@@ -44,10 +44,34 @@ class DiskService:
         except Exception as exc:
             return False, str(exc)
 
+    def _transport_for_device(self, path: str) -> str:
+        try:
+            raw = subprocess.check_output(["lsblk", "-dn", "-o", "TRAN", path], text=True).strip()
+        except Exception:
+            raw = ""
+
+        transport = raw.splitlines()[0].strip().lower() if raw else ""
+        if transport:
+            return transport
+
+        block_name = Path(path).name
+        uevent_path = Path("/sys/block") / block_name / "device" / "uevent"
+        if uevent_path.exists():
+            try:
+                payload = uevent_path.read_text(encoding="utf-8", errors="ignore").lower()
+                if "usb" in payload:
+                    return "usb"
+            except Exception:
+                pass
+        return ""
+
+    def _is_usb_device(self, path: str) -> bool:
+        return self._transport_for_device(path) == "usb"
+
     def _probe_wfs_signature(self, path: str) -> bool:
         try:
             with open(path, "rb") as handle:
-                head = handle.read(4096)
+                head = handle.read(64 * 1024)
         except Exception:
             return False
         if b"WFS" in head:
@@ -60,29 +84,51 @@ class DiskService:
         path: str,
         size: str,
         model: str,
+        transport: str,
         is_block: bool,
         keys_ok: bool,
         active_path: str | None,
         active_wfs_verified: bool,
     ) -> dict:
-        is_wfs = self._probe_wfs_signature(path) if is_block else False
-        if active_path == path and active_wfs_verified:
-            # Keep scan output consistent with a previously verified attachment.
-            is_wfs = True
+        is_usb = transport == "usb"
 
-        attachable = is_block and keys_ok and is_wfs
-        reason = None
-        if not is_block:
-            reason = "not_block_device"
-        elif not keys_ok:
-            reason = "keys_invalid"
-        elif not is_wfs:
-            reason = "wfs_header_not_detected"
+        if self._wfs_adapter.backend_name == "native":
+            # Wii U WFS headers are encrypted on real media. Plain signature scanning is unreliable.
+            # For native backend, treat USB block devices with valid keys as attachable and let
+            # native attach perform authoritative verification.
+            is_wfs = bool(is_block and keys_ok and is_usb)
+            if active_path == path and active_wfs_verified:
+                is_wfs = True
+            attachable = bool(is_block and keys_ok and is_usb)
+            reason = None
+            if not is_usb:
+                reason = "not_usb_device"
+            elif not is_block:
+                reason = "not_block_device"
+            elif not keys_ok:
+                reason = "keys_invalid"
+        else:
+            is_wfs = self._probe_wfs_signature(path) if is_block else False
+            if active_path == path and active_wfs_verified:
+                is_wfs = True
+
+            attachable = bool(is_block and keys_ok and is_usb and is_wfs)
+            reason = None
+            if not is_usb:
+                reason = "not_usb_device"
+            elif not is_block:
+                reason = "not_block_device"
+            elif not keys_ok:
+                reason = "keys_invalid"
+            elif not is_wfs:
+                reason = "wfs_header_not_detected"
 
         return {
             "path": path,
             "size": size,
             "model": model,
+            "transport": transport,
+            "is_usb": is_usb,
             "is_block": is_block,
             "is_wfs": is_wfs,
             "attachable": attachable,
@@ -99,7 +145,7 @@ class DiskService:
 
         try:
             raw = subprocess.check_output(
-                ["lsblk", "--json", "-o", "NAME,KNAME,PATH,SIZE,TYPE,MODEL,FSTYPE"], text=True
+                ["lsblk", "--json", "-o", "NAME,KNAME,PATH,SIZE,TYPE,MODEL,FSTYPE,TRAN"], text=True
             )
             payload = json.loads(raw)
             blockdevices = payload.get("blockdevices", [])
@@ -107,12 +153,16 @@ class DiskService:
                 if node.get("type") != "disk":
                     continue
                 path = node.get("path") or f"/dev/{node.get('name')}"
+                transport = str(node.get("tran") or "").strip().lower()
+                if transport != "usb":
+                    continue
                 is_block = self._is_block_device(path)
                 devices.append(
                     self._device_payload(
                         path=path,
                         size=node.get("size", ""),
                         model=node.get("model", ""),
+                        transport=transport,
                         is_block=is_block,
                         keys_ok=keys_ok,
                         active_path=active_path,
@@ -122,12 +172,16 @@ class DiskService:
         except Exception:
             for candidate in sorted(Path("/dev").glob("sd?")):
                 path = str(candidate)
+                transport = self._transport_for_device(path)
+                if transport != "usb":
+                    continue
                 is_block = self._is_block_device(path)
                 devices.append(
                     self._device_payload(
                         path=path,
                         size="unknown",
                         model="",
+                        transport=transport,
                         is_block=is_block,
                         keys_ok=keys_ok,
                         active_path=active_path,
@@ -146,6 +200,8 @@ class DiskService:
                 raise WfsAdapterError("Only /dev/* block devices are accepted")
             if not self._is_block_device(device_path):
                 raise WfsAdapterError("Target path is not a block device")
+            if not self._is_usb_device(device_path):
+                raise WfsAdapterError("Target device is not USB")
 
         keys_ok, keys_error = self._keys_ok()
         if not keys_ok:
@@ -154,6 +210,12 @@ class DiskService:
         attach_result = self._wfs_adapter.attach(device_path, self._settings.otp_path, self._settings.seeprom_path)
         if not attach_result.attached:
             raise WfsAdapterError("Native attach failed")
+        if not attach_result.key_verified:
+            self._wfs_adapter.detach()
+            raise WfsAdapterError("Attached disk key verification failed")
+        if not attach_result.wfs_verified:
+            self._wfs_adapter.detach()
+            raise WfsAdapterError("Attached disk WFS verification failed")
 
         with session_scope() as session:
             active_records = session.query(DiskAttachment).filter(DiskAttachment.active.is_(True)).all()

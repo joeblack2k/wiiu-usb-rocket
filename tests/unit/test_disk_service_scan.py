@@ -44,6 +44,10 @@ class SimulatedAttachAdapter(BaseWfsAdapter):
         raise NotImplementedError
 
 
+class NativeAttachAdapter(SimulatedAttachAdapter):
+    backend_name = "native"
+
+
 def _init(tmp_path: Path) -> Settings:
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -74,6 +78,7 @@ def test_scan_marks_active_verified_disk_as_wfs(monkeypatch: pytest.MonkeyPatch,
                 "type": "disk",
                 "model": "Storage Device",
                 "fstype": None,
+                "tran": "usb",
             }
         ]
     }
@@ -91,5 +96,40 @@ def test_scan_marks_active_verified_disk_as_wfs(monkeypatch: pytest.MonkeyPatch,
     device = payload["devices"][0]
     assert device["path"] == "/dev/sdb"
     assert device["is_wfs"] is True
+    assert device["attachable"] is True
+    assert device["reason"] is None
+
+
+def test_scan_native_backend_does_not_fail_on_plain_header_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _init(tmp_path)
+    service = DiskService(settings, NativeAttachAdapter())
+
+    lsblk_payload = {
+        "blockdevices": [
+            {
+                "name": "sdb",
+                "path": "/dev/sdb",
+                "size": "238G",
+                "type": "disk",
+                "model": "Storage Device",
+                "fstype": None,
+                "tran": "usb",
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        "core.services.disk_service.subprocess.check_output",
+        lambda *args, **kwargs: json.dumps(lsblk_payload),
+    )
+    monkeypatch.setattr(service, "_is_block_device", lambda _path: True)
+    monkeypatch.setattr(service, "_probe_wfs_signature", lambda _path: False)
+
+    payload = service.scan_devices()
+    assert len(payload["devices"]) == 1
+    device = payload["devices"][0]
+    assert device["is_usb"] is True
     assert device["attachable"] is True
     assert device["reason"] is None

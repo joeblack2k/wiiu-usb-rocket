@@ -83,6 +83,7 @@ def test_attach_checks_keys_after_basic_device_guards(tmp_path: Path, monkeypatc
     service = DiskService(settings, adapter)
 
     monkeypatch.setattr(service, "_is_block_device", lambda _path: True)
+    monkeypatch.setattr(service, "_is_usb_device", lambda _path: True)
 
     with pytest.raises(WfsAdapterError, match="Cannot attach disk"):
         service.attach_device("/dev/sdb")
